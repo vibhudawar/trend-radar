@@ -47,7 +47,8 @@ export const projects = pgTable("projects", {
   productDescription: text("product_description"), // what they sell (feeds adaptation)
   audience: text("audience"), // who they sell to
   jobToBeDone: text("job_to_be_done"), // e.g. "get online sellers to sign up"
-  region: text("region"), // e.g. "IN", "US"
+  region: text("region"), // e.g. "IN", "US" — USER-SET, never inferred
+  competitorUrls: text("competitor_urls").array(), // competitor websites (context for onboarding AI)
   platforms: platform("platforms").array().notNull(),
   status: text("status").notNull().default("idle"), // idle | running | ready | failed
   lastRefreshedAt: timestamp("last_refreshed_at", { withTimezone: true }),
@@ -66,6 +67,8 @@ export const queries = pgTable(
     platform: platform("platform").notNull(),
     type: queryType("type").notNull(),
     value: text("value").notNull(),
+    // for type='account': the client's OWN account — mine for style + exclude from recommendations
+    isOwn: boolean("is_own").notNull().default(false),
     active: boolean("active").notNull().default(true),
     lastRunAt: timestamp("last_run_at", { withTimezone: true }),
     createdAt: createdAt(),
