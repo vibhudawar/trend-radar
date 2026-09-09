@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.next/
+.turbo/
+.env
+.env.*
+!.env.example
+*.log
+worker/scratch/venv/
+worker/scratch/data/
+worker/scratch/media/
+worker/**/__pycache__/
+worker/.venv/
+worker/venv/
+.pytest_cache/
+.DS_Store
