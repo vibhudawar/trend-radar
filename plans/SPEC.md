@@ -44,12 +44,14 @@ class DataSource(Protocol):
 
     def search(self, platform: Platform, query: Query) -> list[RawVideo]: ...     # keyword/hashtag seed
     def fetch_video_detail(self, platform: Platform, url: str) -> RawVideo: ...    # IG views+followers (Post/Reel Info); re-poll
-    def fetch_author_videos(self, platform: Platform, handle: str) -> list[RawVideo]: ...  # ACCOUNT BASELINE (median recent views)
+    def fetch_author_videos(self, platform: Platform, handle: str) -> list[RawVideo]: ...  # ACCOUNT BASELINE + account mining (§4.0 source #2)
+    def fetch_song_videos(self, platform: Platform, audio_id: str) -> list[RawVideo]: ...  # AUDIO EXPANSION (§4.0 source #3)
     def fetch_transcript(self, platform: Platform, url: str) -> str: ...           # spoken hook, no download
 ```
 
-- **Implementations:** `ScrapeCreatorsSource` (primary, validated), `ApifySource` (fallback — `apify/instagram-reel-scraper` is the way to get **IG shares**), `OwnScraperSource` (future).
-- Endpoint map (ScrapeCreators, PHASE0_FINDINGS §2): TikTok `search/keyword`, `v3/profile/videos`, `video/transcript`; IG `v2/reels/search`, `instagram/post`, `instagram/profile`.
+- **Implementations:** `ScrapeCreatorsSource` (primary, validated), `ApifySource` (fallback — `apify/instagram-reel-scraper` for **IG shares**; `novi/tiktok-music-trend-api` for an official **TikTok trending-sounds chart by region** — optional, $45/mo, only if the bottom-up sounds signal (§4.5) proves insufficient), `OwnScraperSource` (future).
+- Endpoint map (ScrapeCreators, PHASE0_FINDINGS §2 + §10): TikTok `search/keyword`, `v3/profile/videos`, `video/transcript`, **`v1/tiktok/song/videos`** (videos using a song), **`v1/tiktok/song`** (song detail/usage); IG `v2/reels/search`, `instagram/post`, `instagram/profile`, **`v1/instagram/audio/reels`** (reels by audio id). No ScrapeCreators endpoint returns a top-down trending-sounds chart — the sounds signal is bottom-up (§4.5).
+- **`fetch_author_videos` is dual-use:** the account **baseline** (median of the creator's own recent views) *and* **account mining** — pulling a competitor/niche account's recent videos as discovery candidates (§4.0 source #2). Same call, both uses.
 - Every method **logs credits consumed** (`credit_log` table, §DATABASE_SCHEMA) with the call type and result count. No exceptions — we are on metered credits.
 - `RawVideo` is the **normalized** shape (§2.3). Each source maps its vendor JSON into it. Missing fields are `None`, never faked.
 - Rate-limit / error handling lives **inside** the source; jobs get clean results or a typed error, never raw HTTP.
@@ -101,6 +103,18 @@ class RawProfile:
 
 `raw` is always persisted (`videos.raw_payload`) so we can recompute derived fields without re-spending credits.
 
+### 2.4 Project onboarding (the profile that drives everything)
+
+Onboarding is a short **form wizard**. The user pastes their **product URL**; the web app fetches the page and an LLM **pre-fills as many fields as it can**. **Every field is user-editable** — AI proposes, the human owns. The richer/more correct the profile, the better-targeted the queries and discovery.
+
+Fields (AI-prefilled unless noted):
+- **name, product_description, niche, target_audience, goal (job-to-be-done)** — derived from the site.
+- **seed keywords** — the search queries we will hit (short, keyword/hashtag-style — NOT long sentences; long natural-language phrases hurt recall, esp. on IG). Editable list.
+- **region(s) targeted** — **USER-SET; we do NOT guess or infer region.** Region scopes search language + which local accounts we mine (§4.0). ScrapeCreators has no hard geo filter, so region is approximated via query language + in-region accounts, not GPS.
+- **their own social accounts** (optional) — the business's own TikTok/IG handles. Used to learn their current style and to **avoid re-recommending content they already posted**.
+- **competitor businesses** (optional) — competitor **websites + social handles**. Seed for account mining (§4.0 source #2). AI suggests some from the site/niche; the user adds more. **Competitors are additive discovery seeds, never a filter** — owners often don't know the best accounts yet, so the engine must still surface creators they've never heard of.
+- **top-performing content** (optional) — links to the client's own past winners. High value for adaptation ("more like this") and de-duplication; **never gate onboarding on it**.
+
 ---
 
 ## 3. Scoring — `ScoringStrategy` per platform (validated, PHASE0_FINDINGS §3)
@@ -129,6 +143,14 @@ class ScoringStrategy(Protocol):
 
 ## 4. Analysis pipeline (outliers only)
 
+### 4.0 Discovery — where candidates come from (union of 3 sources)
+Candidates are the **deduped union** of three additive sources (a thin single source starves the clusters — see the first live Reels run: 6 good queries → only 4 reels → all 1-video "emerging" concepts):
+1. **Keyword search** — the profile's seed keywords (`DataSource.search`). Current behaviour.
+2. **Account mining** — the client's competitor + niche accounts (`DataSource.fetch_author_videos`). High relevance, cheap (one call returns many videos **and** the baseline). Accounts come from onboarding (§2.4) and are **additive, never a filter**.
+3. **Audio expansion** — for a sound trending among our outliers, pull more videos on it (`DataSource.fetch_song_videos`). Rides proven momentum and feeds §4.5.
+
+Dedupe on `(platform, video_id)`; every source's videos flow into the same intent → score → hook → cluster pipeline. **Region** (user-set, §2.4) scopes sources: in-region query language + in-region accounts. Default is in-region only; an **optional "cross-region format inspiration" toggle** may pull proven formats from other regions (specifics — language, pricing, local marketplaces — do not travel; formats/hooks do, and get localized at adaptation §4.4).
+
 ### 4.1 Intent filter (relevance — runs before scoring on candidates)
 `LLMProvider(INTENT)` classifies each candidate: **is this a product/tool PITCH** (matches the client's job-to-be-done) or education/storytime? Keep pitches only. **Cache the result per `video_id`** (the classifier is non-deterministic — classify once, reuse; determinism matters).
 
@@ -149,6 +171,9 @@ outlier → transcript endpoint (spoken opening, no download, DataSource.fetch_t
 
 ### 4.4 Adaptation (the deliverable)
 `LLMProvider(ADAPT)` per concept → rewritten hook for the client, format, length, **shoot-ready script (timecoded beats)**, **test target**, and the **winning-video links** (evidence for the client).
+
+### 4.5 Trending sounds (a signal, not a lane)
+Every candidate carries `audio_id`/`audio_title`. Aggregate sounds **bottom-up** across outliers → a **global Trending Songs tab** (across the user's projects, owner-scoped), **filterable by region** (region-set queries/accounts bias the ingested audio, so region is a first-class filter). Per sound: `#videos` using it, median `account_outperformance` of those videos, rising-vs-mature (velocity), and example clips. Stored via `trends` (`trend_type = 'sound'`) + `trend_members`. The client-facing suggestion is simply **"use this sound — it's trending"**; how they use it (including muting it to ride the trend) is their call, not ours. A top-down official chart by region is available via Apify (`novi/tiktok-music-trend-api`, §2.1) but is an **optional paid upgrade**, not the foundation.
 
 ### Two lanes
 Run selection twice: **Rising now** (recency-filtered) and **Proven playbook** (all-time, no recency filter). Both surfaced separately.
@@ -176,6 +201,7 @@ Retry every external call once with backoff; cache intent + hook + analysis by `
   - **Breakout table** — ranked outliers: thumbnail, author, outlier ×, engagement %, velocity, age, platform badge. Sortable, filterable by niche/platform.
   - **Video detail** — metric time-series (from `video_snapshots`), the analysis card (hook line, type, format, replication score), link to source.
   - **Trends board** — rising / peak / declining clusters with a sparkline of growth over time (Phase 3).
+  - **Trending Songs tab** — a **global** surface (across the user's projects, owner-scoped), **filterable by region**: ranked sounds with usage count, median outperformance, rising/mature badge, and example clips; each row links to the videos using it. Suggestion copy = "use this trending sound." (§4.5)
   - **Alerts feed** — the "Stay ahead" surface (Phase 3).
 - **Anti-slop UI:** skeletons not spinners; empty states name the next action ("No niches yet — create one"); every surfaced number is clickable to its underlying videos. No vanity metrics.
 - Numbers formatted compact (`2.4M`, `15.4%`); `approximated`/`no_baseline` flags shown honestly, never hidden.

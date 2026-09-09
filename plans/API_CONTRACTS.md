@@ -77,9 +77,11 @@ The validated pipeline (PHASE0_FINDINGS §1, SPEC §4) runs in **TWO LANES per n
 ### B.1 `ingest`
 
 ```
-ingest(niche_id, platform, query, lane) :
-  raws = DataSource.search(platform, query)              # + credit_log; multiple queries/pages for breadth
-  for r in raws:
+ingest(project_id, platform, lane) :                     # discovery = deduped union of 3 sources (SPEC §4.0)
+  raws  = DataSource.search(platform, q)          for q in seed_keywords      # source #1
+  raws += DataSource.fetch_author_videos(platform, h) for h in accounts       # source #2: competitor/niche accounts
+  raws += DataSource.fetch_song_videos(platform, a)   for a in hot_audio_ids  # source #3: audio expansion
+  for r in dedupe(raws, on=(platform, video_id)):        # + credit_log each call
     if not passes_filters(r): continue                   # recency (taken_at, rising lane only) / language-region / min-view floor
     author = upsert_author(r)
     video  = upsert_video(r)                             # on (platform, video_id)
@@ -87,8 +89,9 @@ ingest(niche_id, platform, query, lane) :
   mark query.last_run_at
 ```
 
-- Dedupe on `(platform, video_id)`. Upsert video identity, **append** snapshot.
-- Filters decide *relevance* before any LLM spend: recency (`taken_at`, rising lane), language/region (per client market), min-view floor.
+- **Discovery is the deduped union of 3 additive sources** (SPEC §4.0): keyword search, account mining (competitor/niche accounts from onboarding — additive, never a filter), audio expansion. Dedupe on `(platform, video_id)`.
+- Filters decide *relevance* before any LLM spend: recency (`taken_at`, rising lane), language/region (user-set market, §2.4), min-view floor.
+- **Credit efficiency:** account mining returns many videos + the baseline per call; cache `fetch_video_detail`/`fetch_author_videos` results **across lanes** within a run (the first Reels run wasted the cap re-fetching per lane).
 
 ### B.2 `intent_filter` (LLM — relevance, before scoring)
 
@@ -173,13 +176,14 @@ alert(niche_id):  breakout (re-poll via fetch_video_detail, velocity threshold) 
 ## C. Interfaces (the swappable boundaries)
 
 ### C.1 `DataSource`
-(see SPEC §2.1) — four methods, matching the validated pipeline:
+(see SPEC §2.1) — five methods, matching the validated pipeline + discovery (§4.0):
 
 | method | purpose |
 |---|---|
-| `search(platform, query)` | keyword/hashtag seed → `list[RawVideo]` |
+| `search(platform, query)` | keyword/hashtag seed → `list[RawVideo]` (discovery source #1) |
 | `fetch_video_detail(platform, url)` | IG views + followers via Post/Reel Info → `RawVideo`; also used to re-poll |
-| `fetch_author_videos(platform, handle)` | **ACCOUNT BASELINE** — creator's recent videos → median recent views |
+| `fetch_author_videos(platform, handle)` | **ACCOUNT BASELINE** (median recent views) **+ account mining** — a competitor/niche account's recent videos as candidates (discovery source #2) |
+| `fetch_song_videos(platform, audio_id)` | videos/reels using a sound → `list[RawVideo]` (discovery source #3; feeds Trending Songs §4.5) |
 | `fetch_transcript(platform, url)` | spoken hook (WEBVTT), no download → `str` |
 
 Maps vendor JSON → `RawVideo`/`RawProfile`. Logs credits (1 credit = 1 request). Missing fields → `None`, never faked.
@@ -190,10 +194,13 @@ Maps vendor JSON → `RawVideo`/`RawProfile`. Logs credits (1 credit = 1 request
 |---|---|---|
 | `search` | `v1/tiktok/search/keyword?query=` (param is **`query`**, not `keyword`) — returns play_count, digg, comment, **share_count**, **collect_count (saves)**, follower_count inline | `v2/reels/search?query=&date_posted=` — niche-targetable; no views/followers/shares |
 | `fetch_video_detail` | (inline from search) | `instagram/post?url=` (Post/Reel Info) → `video_play_count`, followers; **shares/saves never exposed** |
-| `fetch_author_videos` | `v3/tiktok/profile/videos?handle=` → recent ~10 videos' play_count | `instagram/profile?handle=` (followers; view baseline limited) |
+| `fetch_author_videos` | `v3/tiktok/profile/videos?handle=` → recent ~10 videos' play_count | `instagram/profile?handle=` → `edge_followed_by.count` (followers) **and** timeline `video_play_count` (the account baseline — both in one call) |
+| `fetch_song_videos` | `v1/tiktok/song/videos?...` (videos using a song); `v1/tiktok/song` (song detail/usage) | `v1/instagram/audio/reels?...` (reels by audio id) |
 | `fetch_transcript` | `v1/tiktok/video/transcript?url=` (WEBVTT, `language` param) | — |
 
 - **IG never exposes shares/saves** via ScrapeCreators. To get IG shares, swap the `DataSource` to Apify **`apify/instagram-reel-scraper`** (returns reel shares). Kept as a swappable option.
+- **IG views + followers + baseline (verified 2026-09-09):** `instagram/post` returns the reel's `video_play_count` (views) but **not** followers; `instagram/profile` returns followers **and** the account baseline (median of the creator's recent reels' `video_play_count`) in a single call. So a Reels candidate costs 1 (post detail) + 1 (profile per unique creator).
+- **Trending sounds:** no ScrapeCreators top-down chart exists — the Trending Songs signal (§4.5) is bottom-up from ingested `audio_id`s. An official TikTok chart by region is available via Apify **`novi/tiktok-music-trend-api`** (region code param; `user_count` usage) — optional paid upgrade ($45/mo), not required.
 - IG views require the per-reel detail call (`instagram/post`); `video_text` is empty on TikTok → on-screen text needs frames+vision, not the API.
 - Bad requests don't charge credits. Auth: `x-api-key` header. Response includes `credits_remaining` → write to `credit_log`.
 

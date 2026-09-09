@@ -20,7 +20,7 @@
 
 ---
 
-## Phase 1 — Build the validated pipeline (one niche, both lanes)
+## Phase 1 — Build the validated pipeline (one niche, both lanes) — DONE
 
 **Goal:** stand up the Phase-0-validated pipeline end to end for ONE real niche, running in both lanes, surfacing evidence-backed concept cards in a dashboard.
 
@@ -61,6 +61,22 @@
 - **Brief/script refinement:** improve adapted hook + shoot-ready script quality (angle, format, length, test target).
 
 **Exit criterion:** for a real niche the tool produces HIGH-confidence concepts from a broad sample; Instagram Reels ingests and ranks alongside TikTok; repeat runs are deterministic and cost stays within the credit budget.
+
+> **Status:** Instagram Reels ingestion + per-user auth + Refresh UX **shipped** (2026-09). The *breadth* gap remains — the first live Reels run starved (6 queries → 4 reels → 1-video "emerging" concepts). That's what Phase 2.5 fixes.
+
+---
+
+## Phase 2.5 — Onboarding v2 + Account/Audio discovery + Trending Songs
+
+**Goal:** fix the starved-sample problem by widening *input* (better onboarding → richer, additive discovery), and ship the Trending Songs surface. This is the quality turnaround; the algorithm is fine, the input was thin.
+
+**Tasks**
+- **Onboarding form + AI prefill (SPEC §2.4):** paste URL → LLM pre-fills name/desc/niche/audience/goal/keywords/suggested-competitors; every field editable. Add **own accounts**, **competitor accounts + websites**, **region (user-set, never inferred)**, optional **top-performing content**. Persist accounts/keywords/audio as `queries` rows (`account`/`keyword`/`sound`, `is_own` flag).
+- **Discovery = union of 3 sources (SPEC §4.0):** keyword search + **account mining** (`fetch_author_videos` on competitor/niche accounts — additive, never a filter) + **audio expansion** (`fetch_song_videos`). Dedupe on `(platform, video_id)`. Cache profile/detail **across lanes** (the first run wasted the cap re-fetching).
+- **Trending Songs tab (global, region-filterable — SPEC §4.5):** bottom-up aggregation of ingested `audio_id`s across the owner's projects; per-sound usage/median-outperformance/rising-mature + example clips; `trends(type='sound')`. Suggestion copy = "use this sound." Apify `novi/tiktok-music-trend-api` (official region chart, $45/mo) kept as an optional upgrade only.
+- **Region policy:** in-region by default (language + local accounts; no hard geo filter in ScrapeCreators); optional cross-region "format inspiration" toggle (localize at adapt).
+
+**Exit criterion:** a freshly onboarded business (region-set, with competitors) produces a broad, deduped candidate set from all 3 sources, concepts reach MEDIUM/HIGH confidence, and the global Trending Songs tab lists real region-filtered sounds — all within the credit budget.
 
 ---
 

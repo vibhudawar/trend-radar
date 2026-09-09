@@ -134,3 +134,19 @@ Keyword search sorts by all-time relevance, so big-reach videos are often old (t
 3. **DATABASE_SCHEMA:** add `account baseline` on authors; `outperformance`, `velocity`, `duration`, `age` on scores/snapshots; `concepts` + `concept_members` with confidence + lifecycle; `intent`/`content_type` on videos; keep share/save columns nullable (IG null, TikTok filled).
 4. **API_CONTRACTS:** `DataSource` gains `fetch_video_detail` (IG views/followers) + `fetch_author_videos` (baseline) + `fetch_transcript`; worker jobs: ingest → enrich(baseline) → hook(media) → score → cluster → adapt. Endpoint map in §2.
 5. **ROADMAP:** Phase 1 builds this corrected pipeline (single niche, both lanes, concept output); time-series (true velocity, Growing/Declining lifecycle) is Phase 3.
+
+---
+
+## 11. Audio / discovery endpoints (verified 2026-09-10, for Phase 2.5)
+
+Checked provider docs to enable **account mining** + **audio expansion** discovery (SPEC §4.0) and the **Trending Songs** tab (§4.5).
+
+**ScrapeCreators — audio expansion CONFIRMED (≈1 credit each):**
+- TikTok: `v1/tiktok/song/videos` (videos using a song), `v1/tiktok/song` (song detail/usage).
+- Instagram: `v1/instagram/audio/reels` (reels by audio id).
+- Account mining reuses the existing `v3/tiktok/profile/videos` + `instagram/profile` (returns the account's recent videos with views) — no new endpoint.
+- **No top-down "trending sounds chart by region"** exists in ScrapeCreators → the Trending Songs signal is **bottom-up** (aggregate ingested `audio_id`s), which is region-scoped and niche-relevant anyway.
+
+**Apify — optional top-down chart:** `novi/tiktok-music-trend-api` returns an official TikTok trending-sounds chart, **filterable by 2-char region code** (US, IN…), with `user_count` usage. **$45/mo + usage, TikTok-only.** Treat as an optional upgrade if the bottom-up signal proves insufficient — not required for Phase 2.5. (`apify/instagram-reel-scraper` remains the option for IG shares.)
+
+**Verified IG metrics reality (2026-09-09):** `instagram/post` → `data.xdt_shortcode_media.video_play_count` (views) but NOT followers; `instagram/profile` → `edge_followed_by.count` (followers) AND the account baseline (median of timeline `video_play_count`) in one call. Reels candidate cost = 1 (post) + 1 (profile/creator).
