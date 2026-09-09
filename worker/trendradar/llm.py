@@ -7,7 +7,7 @@ from typing import Any, Literal
 from openai import OpenAI
 from pydantic import BaseModel
 
-from .config import MODEL_INTENT, MODEL_REASON, MODEL_VISION, OPENAI_API_KEY, require
+from .config import MODEL_REASON, MODEL_VISION, OPENAI_API_KEY, require
 
 _client: OpenAI | None = None
 
@@ -85,18 +85,22 @@ def _parse(model: str, content: Any, schema: type[BaseModel]) -> BaseModel:
 
 
 def classify_intent(items: list[dict[str, Any]], context: str = "") -> dict[int, bool]:
-    listing = "\n".join(f'{i}: {it["caption"][:160]}' for i, it in enumerate(items))
+    listing = "\n".join(f'{i}: {it.get("handle","?")} — {it["caption"][:200]}' for i, it in enumerate(items))
     prompt = (
-        "You screen short-form videos to find COPYABLE REFERENCE ADS for a specific business.\n"
+        "You screen short-form videos to find COPYABLE REFERENCE ADS for ONE specific business.\n"
         f"{context}\n\n"
-        "For each video, is_pitch=true ONLY if its hook/format is a relevant, copyable reference for "
-        "achieving THIS business's goal for THIS audience — i.e. it promotes a product/tool/service or "
-        "shows a problem→solution/demo in the same space. is_pitch=false for brand PR, event recaps, "
-        "award/news announcements, founder interviews, generic education, storytime, or anything off-goal — "
-        "even if it mentions a related brand. Be strict: a festival recap or a 'big deal announced' clip is NOT a pitch.\n"
+        "Keyword search drags in off-topic creators who merely MENTION a word. Be strict on TWO tests — "
+        "is_pitch=true ONLY if BOTH hold:\n"
+        "1) TOPICAL MATCH: the video is genuinely about this business's DOMAIN / the same problem space and "
+        "audience (not a food, travel, comedy, news, finance-in-general, or lifestyle creator who merely drops a "
+        "keyword or talks about money/cashback broadly).\n"
+        "2) PITCH/DEMO: it promotes a product/tool/service or shows a problem→solution/demo you could model an ad on.\n"
+        "is_pitch=false for anything off-domain, plus brand PR, event/festival recaps, award/'big deal' news, "
+        "founder interviews, generic education, storytime, or entertainment — even if it name-drops a related brand. "
+        "When unsure whether it's really in-domain, answer false.\n"
         "Return one item per input index.\n\n" + listing
     )
-    res = _parse(MODEL_INTENT, prompt, IntentResult)
+    res = _parse(MODEL_REASON, prompt, IntentResult)
     return {it.idx: it.is_pitch for it in res.items}  # type: ignore[attr-defined]
 
 

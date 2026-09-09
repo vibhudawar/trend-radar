@@ -301,8 +301,10 @@ def _collect_reels(conn, project, budget: Budget, lane: str) -> list[dict]:
 
 
 def _cluster_and_adapt(conn, project, lane: str, ranked: list[dict]) -> None:
-    """Cluster one platform's PROVEN winners into recurring concepts + adapt to the client.
-    Thin/single-creator clusters are suppressed — never present anecdote as evidence."""
+    """Cluster PROVEN winners into concepts + adapt to the client. Members are always genuine
+    winners (winner-gate upstream). A concept is a "proven pattern" only when it spans enough
+    winning videos AND creators; otherwise it's an honestly-labeled "single strong example"
+    (confidence=emerging) — we surface it (a real winner is signal) but never call it a trend."""
     if not ranked:
         return
     project_id = project["id"]
@@ -310,24 +312,36 @@ def _cluster_and_adapt(conn, project, lane: str, ranked: list[dict]) -> None:
     concepts = llm.cluster_concepts(ranked, ctx)
     niche_med_save = st.median([v["score"]["save_rate"] for v in ranked]) or 1e-6
 
+    # Build the groups the clusterer produced, then a COMPLETENESS pass: every proven winner the
+    # LLM left unplaced becomes its own single-example concept — never silently drop a real winner.
+    groups: list[tuple[str, str | None, list[dict]]] = []
+    placed: set[int] = set()
     for c in concepts:
-        members = [ranked[i] for i in c.get("member_idxs", []) if i < len(ranked)]
+        idxs = [i for i in c.get("member_idxs", []) if 0 <= i < len(ranked)]
+        if not idxs:
+            continue
+        placed.update(idxs)
+        groups.append((c.get("name", "Concept"), c.get("pattern"), [ranked[i] for i in idxs]))
+    for i, v in enumerate(ranked):
+        if i not in placed:
+            groups.append((v.get("hook_text") or "Standout winner", None, [v]))
+
+    for name, pattern, members in groups:
         n_creators = len({m["handle"] for m in members})
-        if len(members) < MIN_CONCEPT_VIDEOS or n_creators < MIN_CONCEPT_CREATORS:
-            continue  # guardrail: need enough winning videos across enough creators to be a real pattern
+        is_pattern = len(members) >= MIN_CONCEPT_VIDEOS and n_creators >= MIN_CONCEPT_CREATORS
+        confidence = _confidence(len(members), n_creators) if is_pattern else "emerging"
         outs = [m["score"]["account_outperformance"] for m in members if m["score"]["account_outperformance"]]
         med_save = st.median([m["score"]["save_rate"] for m in members]) if members else 0
         try:
-            a = llm.adapt_concept(c, members, ctx)
+            a = llm.adapt_concept({"name": name, "pattern": pattern or ""}, members, ctx)
         except Exception:  # noqa: BLE001
             a = {}
         db.insert_concept(conn, {
-            "project_id": project_id, "lane": lane, "name": c.get("name", "Concept"),
-            "pattern": c.get("pattern"), "n_videos": len(members),
-            "n_creators": len({m["handle"] for m in members}),
+            "project_id": project_id, "lane": lane, "name": name,
+            "pattern": pattern, "n_videos": len(members), "n_creators": n_creators,
             "median_outperformance": round(st.median(outs), 2) if outs else None,
             "niche_spike": round(med_save / niche_med_save, 2),
-            "confidence": _confidence(len(members), len({m["handle"] for m in members})),
+            "confidence": confidence,
             "lifecycle": _lifecycle([m["score"] for m in members]),
             "adapted_hook": a.get("adapted_hook"), "format": a.get("format"),
             "length_s": a.get("length_s"), "test_target": a.get("test_target"),
@@ -343,11 +357,10 @@ def _run_lane(conn, project, budget: Budget, lane: str) -> None:
     if "reels" in platforms:
         collected.append(_collect_reels(conn, project, budget, lane))
 
-    ranked_sets = [r for r in collected if r]
-    if not ranked_sets:
-        return
-    db.clear_concepts(conn, project["id"], lane)  # clear once, then cluster each platform separately
-    for ranked in ranked_sets:
+    # Always clear this lane's old concepts — even with zero winners — so a stricter run can't
+    # leave stale/garbage concepts from a previous run showing (honest empty > stale).
+    db.clear_concepts(conn, project["id"], lane)
+    for ranked in [r for r in collected if r]:
         _cluster_and_adapt(conn, project, lane, ranked)
 
 

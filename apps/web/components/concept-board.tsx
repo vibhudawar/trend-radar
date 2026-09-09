@@ -32,7 +32,14 @@ const CONF: Record<string, string> = {
   medium: "bg-blue-500/15 text-blue-500 border-blue-500/25",
   emerging: "bg-amber-500/15 text-amber-500 border-amber-500/25",
 };
+// Honest labels: only multi-creator patterns are "patterns"; a lone winner is a single example.
+const CONF_LABEL: Record<string, string> = {
+  high: "Proven pattern",
+  medium: "Emerging pattern",
+  emerging: "Single strong example",
+};
 const CONF_RANK: Record<string, number> = { high: 3, medium: 2, emerging: 1 };
+const isPattern = (c: string) => c === "high" || c === "medium";
 
 const LANE_COPY = {
   rising: {
@@ -92,11 +99,11 @@ function Lane({ lane, items }: { lane: "rising" | "proven"; items: ConceptView[]
       </Card>
     );
   }
-  // strongest concept = the recommended pick for this lane
+  // strongest concept = the recommended pick — but ONLY a genuine multi-creator pattern earns it.
   const sorted = [...items].sort(
     (a, b) => (CONF_RANK[b.confidence] - CONF_RANK[a.confidence]) || (b.nVideos - a.nVideos),
   );
-  const recommendedId = sorted[0]?.id;
+  const recommendedId = sorted[0] && isPattern(sorted[0].confidence) ? sorted[0].id : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -127,7 +134,7 @@ function ConceptCard({ c, recommend }: {
       <div className="flex items-start justify-between gap-3">
         <h3 className="text-base font-semibold leading-snug">{c.name}</h3>
         <div className="flex shrink-0 gap-1.5">
-          <Badge variant="outline" className={cn("capitalize", CONF[c.confidence])}>{c.confidence} confidence</Badge>
+          <Badge variant="outline" className={cn(CONF[c.confidence])}>{CONF_LABEL[c.confidence] ?? c.confidence}</Badge>
           <Badge variant="outline" className="capitalize">{c.lifecycle}</Badge>
         </div>
       </div>

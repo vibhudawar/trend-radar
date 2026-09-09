@@ -69,8 +69,7 @@ def _ig_profile_body(handle: str) -> dict[str, Any] | None:
         d = _load(f) or {}
         if handle in d:
             return d[handle]
-    generic = _load("ig_profiles.json") or {}
-    return next(iter(generic.values()), None)  # last resort: any cached profile
+    return None  # honest: no cached profile for this handle → no baseline (mirrors a live miss)
 
 
 def instagram_profile(handle: str) -> dict[str, Any]:
