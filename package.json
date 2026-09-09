@@ -1,0 +1,12 @@
+{
+  "name": "trendradar",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.2",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "db:generate": "pnpm --filter @trendradar/db generate",
+    "db:migrate": "pnpm --filter @trendradar/db migrate",
+    "db:studio": "pnpm --filter @trendradar/db studio"
+  }
+}
