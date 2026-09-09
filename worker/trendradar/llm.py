@@ -7,7 +7,7 @@ from typing import Any, Literal
 from openai import OpenAI
 from pydantic import BaseModel
 
-from .config import MODEL_INTENT, MODEL_REASON, MODEL_VISION, OPENAI_API_KEY, require
+from .config import MODEL_REASON, MODEL_VISION, OPENAI_API_KEY, require
 
 _client: OpenAI | None = None
 
@@ -84,14 +84,23 @@ def _parse(model: str, content: Any, schema: type[BaseModel]) -> BaseModel:
     return parsed
 
 
-def classify_intent(items: list[dict[str, Any]]) -> dict[int, bool]:
-    listing = "\n".join(f'{i}: {it["caption"][:160]}' for i, it in enumerate(items))
+def classify_intent(items: list[dict[str, Any]], context: str = "") -> dict[int, bool]:
+    listing = "\n".join(f'{i}: {it.get("handle","?")} — {it["caption"][:200]}' for i, it in enumerate(items))
     prompt = (
-        "Classify short videos by MARKETING INTENT for a tool that finds reference ads for a SaaS/product. "
-        "is_pitch=true if it PROMOTES a specific app/tool/software/service the viewer should use or buy; "
-        "false if generic education, storytime, or entertainment. Return one item per input index.\n\n" + listing
+        "You screen short-form videos to find COPYABLE REFERENCE ADS for ONE specific business.\n"
+        f"{context}\n\n"
+        "Keyword search drags in off-topic creators who merely MENTION a word. Be strict on TWO tests — "
+        "is_pitch=true ONLY if BOTH hold:\n"
+        "1) TOPICAL MATCH: the video is genuinely about this business's DOMAIN / the same problem space and "
+        "audience (not a food, travel, comedy, news, finance-in-general, or lifestyle creator who merely drops a "
+        "keyword or talks about money/cashback broadly).\n"
+        "2) PITCH/DEMO: it promotes a product/tool/service or shows a problem→solution/demo you could model an ad on.\n"
+        "is_pitch=false for anything off-domain, plus brand PR, event/festival recaps, award/'big deal' news, "
+        "founder interviews, generic education, storytime, or entertainment — even if it name-drops a related brand. "
+        "When unsure whether it's really in-domain, answer false.\n"
+        "Return one item per input index.\n\n" + listing
     )
-    res = _parse(MODEL_INTENT, prompt, IntentResult)
+    res = _parse(MODEL_REASON, prompt, IntentResult)
     return {it.idx: it.is_pitch for it in res.items}  # type: ignore[attr-defined]
 
 
@@ -114,13 +123,17 @@ CAPTION: {caption}"""
     return _parse(MODEL_REASON, prompt, HookResult).model_dump()
 
 
-def cluster_concepts(outliers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def cluster_concepts(outliers: list[dict[str, Any]], context: str = "") -> list[dict[str, Any]]:
     import json
     payload = [{"i": i, "hook": o.get("hook_text") or o.get("caption", "")[:160],
                 "format": o.get("format")} for i, o in enumerate(outliers)]
     prompt = (
-        "Group these winning short-video ads into 2-4 RECURRING CONCEPTS (repeatable hook+angle patterns). "
-        "Every item maps to exactly one concept via member_idxs (0-based input indices).\n\n"
+        "These are PROVEN winning short-video ads (each beat its creator's own baseline).\n"
+        f"{context}\n\n"
+        "Group them into RECURRING CONCEPTS — repeatable HOOK+ANGLE patterns worth copying for this business. "
+        "A concept must be a genuine shared pattern across its members (same hook mechanic/structure), not a "
+        "loose theme. Only group items that truly share a pattern; leave a one-off in its own concept (it will "
+        "be filtered downstream). Every item maps to exactly one concept via member_idxs (0-based indices).\n\n"
         + json.dumps(payload, ensure_ascii=False)
     )
     res = _parse(MODEL_REASON, prompt, ConceptList)

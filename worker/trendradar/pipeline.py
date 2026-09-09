@@ -9,7 +9,8 @@ from typing import Any
 import psycopg
 
 from . import db, llm
-from .config import (CREDIT_CAP_PER_RUN, DATA_SOURCE, MIN_VIEWS, RISING_MAX_AGE_DAYS, TOP_OUTLIERS)
+from .config import (CREDIT_CAP_PER_RUN, DATA_SOURCE, ENRICH_RESERVE_FRAC, MIN_CONCEPT_CREATORS,
+                     MIN_CONCEPT_VIDEOS, MIN_OUTPERFORMANCE, MIN_VIEWS, RISING_MAX_AGE_DAYS, TOP_OUTLIERS)
 from .media import frames_from_video
 from .scoring import score_video
 from .sources import get_source
@@ -19,20 +20,32 @@ LANES = ("rising", "proven")
 
 
 class Budget:
-    """Per-run credit ceiling. 1 credit = 1 ScrapeCreators request. Free in fixture mode."""
+    """Per-run credit ceiling. 1 credit = 1 ScrapeCreators request. Free in fixture mode.
+    A slice (ENRICH_RESERVE_FRAC) is reserved for enrichment (baseline/views) so discovery
+    (search/mining) can't spend the whole cap and starve the calls that PROVE a video won."""
     def __init__(self, conn: psycopg.Connection, project_id: str, cap: int):
         self.conn, self.project_id, self.remaining, self.used = conn, project_id, cap, 0
         self.free = DATA_SOURCE == "fixture"
+        self.reserve = int(cap * ENRICH_RESERVE_FRAC)
 
-    def spend(self, call: str, result_count: int | None = None) -> bool:
+    def spend(self, call: str, result_count: int | None = None, *, kind: str = "discovery") -> bool:
         if self.free:
             return True
-        if self.remaining <= 0:
+        floor = self.reserve if kind == "discovery" else 0  # discovery can't dip into the reserve
+        if self.remaining <= floor:
             return False
         self.remaining -= 1
         self.used += 1
         db.log_credit(self.conn, "scrapecreators", call, 1, result_count, self.project_id)
         return True
+
+
+def _context(project: dict) -> str:
+    """The business profile the operator entered — leveraged in intent, clustering, adaptation."""
+    fields = [("BUSINESS", project.get("name")), ("WHAT IT DOES", project.get("product_description")),
+              ("AUDIENCE", project.get("audience")), ("GOAL", project.get("job_to_be_done")),
+              ("REGION", project.get("region"))]
+    return "\n".join(f"{k}: {v}" for k, v in fields if v)
 
 
 def _iso_today() -> str:
@@ -83,7 +96,7 @@ def _too_old(v: dict, lane: str) -> bool:
 def _hook_for(conn, budget: Budget, v: dict, *, allow_transcript: bool) -> None:
     """Decode the real hook from the video (frames + optional transcript), persist the analysis."""
     spoken = ""
-    if allow_transcript and v.get("url") and budget.spend("transcript"):
+    if allow_transcript and v.get("url") and budget.spend("transcript", kind="enrich"):
         try:
             spoken = sc.tiktok_transcript(v["url"])
         except Exception:  # noqa: BLE001
@@ -124,9 +137,9 @@ def _persist(conn, project_id: str, v: dict, platform: str, baseline: int | None
                        save_count=v.get("save_count"))
 
 
-def _intent_pitches(conn, items: list[dict], *, mark: bool) -> list[dict]:
-    """LLM intent filter → keep only tool/product pitches (drop pure education)."""
-    keep = llm.classify_intent(items)
+def _intent_pitches(conn, items: list[dict], *, mark: bool, context: str = "") -> list[dict]:
+    """LLM intent filter → keep only goal-relevant, copyable pitches (drop education/PR/off-goal)."""
+    keep = llm.classify_intent(items, context)
     pitches = []
     for i, v in enumerate(items):
         is_pitch = keep.get(i, False)
@@ -137,8 +150,15 @@ def _intent_pitches(conn, items: list[dict], *, mark: bool) -> list[dict]:
     return pitches
 
 
+def _is_winner(v: dict) -> bool:
+    """A real outlier: has a baseline AND beat it by >= MIN_OUTPERFORMANCE. No baseline ⇒ not proven."""
+    s = v.get("score") or {}
+    return s.get("flag") == "ok" and (s.get("account_outperformance") or 0) >= MIN_OUTPERFORMANCE
+
+
 def _rank_and_hook(conn, budget: Budget, pitches: list[dict], *, allow_transcript: bool) -> list[dict]:
-    ranked = sorted([p for p in pitches if p["score"]["flag"] != "noise"],
+    # Only PROVEN winners get deep-analyzed and become concept evidence (never present a non-winner as one).
+    ranked = sorted([p for p in pitches if _is_winner(p)],
                     key=lambda p: p["score"]["composite"], reverse=True)[:TOP_OUTLIERS]
     for v in ranked:
         _hook_for(conn, budget, v, allow_transcript=allow_transcript)
@@ -185,7 +205,7 @@ def _collect_tiktok(conn, project, budget: Budget, lane: str) -> list[dict]:
     for v in videos.values():
         _persist(conn, project_id, v, "tiktok", baselines.get(v["handle"]))
 
-    pitches = _intent_pitches(conn, list(videos.values()), mark=True)
+    pitches = _intent_pitches(conn, list(videos.values()), mark=True, context=_context(project))
     if not pitches:
         return []
 
@@ -194,7 +214,7 @@ def _collect_tiktok(conn, project, budget: Budget, lane: str) -> list[dict]:
         h = v["handle"]
         if h not in baselines:
             baselines[h] = None
-            if budget.spend("author_videos"):
+            if budget.spend("author_videos", kind="enrich"):
                 try:
                     baselines[h] = sc.tiktok_author_baseline(h)
                 except Exception:  # noqa: BLE001
@@ -243,7 +263,8 @@ def _collect_reels(conn, project, budget: Budget, lane: str) -> list[dict]:
         return []
 
     # intent on captions across both pools — before spending on search-reel enrichment
-    pitches = _intent_pitches(conn, list(mined.values()) + list(search_reels.values()), mark=False)
+    pitches = _intent_pitches(conn, list(mined.values()) + list(search_reels.values()),
+                              mark=False, context=_context(project))
     if not pitches:
         return []
 
@@ -255,12 +276,12 @@ def _collect_reels(conn, project, budget: Budget, lane: str) -> list[dict]:
         else:
             if h not in profiles:
                 profiles[h] = {"follower_count": None, "baseline_median_views": None, "is_verified": None}
-                if budget.spend("author_videos"):  # profile = followers + baseline
+                if budget.spend("author_videos", kind="enrich"):  # profile = followers + baseline
                     try:
                         profiles[h] = sc.instagram_profile(h)
                     except Exception:  # noqa: BLE001
                         pass
-            if v.get("url") and budget.spend("video_detail"):  # per-reel views (Post/Reel Info)
+            if v.get("url") and budget.spend("video_detail", kind="enrich"):  # per-reel views (Post/Reel Info)
                 try:
                     v["view_count"] = sc.instagram_post_views(v["url"])
                 except Exception:  # noqa: BLE001
@@ -280,31 +301,47 @@ def _collect_reels(conn, project, budget: Budget, lane: str) -> list[dict]:
 
 
 def _cluster_and_adapt(conn, project, lane: str, ranked: list[dict]) -> None:
-    """Cluster one platform's outliers into recurring concepts + adapt to the client."""
+    """Cluster PROVEN winners into concepts + adapt to the client. Members are always genuine
+    winners (winner-gate upstream). A concept is a "proven pattern" only when it spans enough
+    winning videos AND creators; otherwise it's an honestly-labeled "single strong example"
+    (confidence=emerging) — we surface it (a real winner is signal) but never call it a trend."""
     if not ranked:
         return
     project_id = project["id"]
-    concepts = llm.cluster_concepts(ranked)
+    ctx = _context(project)
+    concepts = llm.cluster_concepts(ranked, ctx)
     niche_med_save = st.median([v["score"]["save_rate"] for v in ranked]) or 1e-6
-    client_desc = project.get("product_description") or f"{project['name']} — {project.get('job_to_be_done') or ''}"
 
+    # Build the groups the clusterer produced, then a COMPLETENESS pass: every proven winner the
+    # LLM left unplaced becomes its own single-example concept — never silently drop a real winner.
+    groups: list[tuple[str, str | None, list[dict]]] = []
+    placed: set[int] = set()
     for c in concepts:
-        members = [ranked[i] for i in c.get("member_idxs", []) if i < len(ranked)]
-        if not members:
+        idxs = [i for i in c.get("member_idxs", []) if 0 <= i < len(ranked)]
+        if not idxs:
             continue
+        placed.update(idxs)
+        groups.append((c.get("name", "Concept"), c.get("pattern"), [ranked[i] for i in idxs]))
+    for i, v in enumerate(ranked):
+        if i not in placed:
+            groups.append((v.get("hook_text") or "Standout winner", None, [v]))
+
+    for name, pattern, members in groups:
+        n_creators = len({m["handle"] for m in members})
+        is_pattern = len(members) >= MIN_CONCEPT_VIDEOS and n_creators >= MIN_CONCEPT_CREATORS
+        confidence = _confidence(len(members), n_creators) if is_pattern else "emerging"
         outs = [m["score"]["account_outperformance"] for m in members if m["score"]["account_outperformance"]]
         med_save = st.median([m["score"]["save_rate"] for m in members]) if members else 0
         try:
-            a = llm.adapt_concept(c, members, client_desc)
+            a = llm.adapt_concept({"name": name, "pattern": pattern or ""}, members, ctx)
         except Exception:  # noqa: BLE001
             a = {}
         db.insert_concept(conn, {
-            "project_id": project_id, "lane": lane, "name": c.get("name", "Concept"),
-            "pattern": c.get("pattern"), "n_videos": len(members),
-            "n_creators": len({m["handle"] for m in members}),
+            "project_id": project_id, "lane": lane, "name": name,
+            "pattern": pattern, "n_videos": len(members), "n_creators": n_creators,
             "median_outperformance": round(st.median(outs), 2) if outs else None,
             "niche_spike": round(med_save / niche_med_save, 2),
-            "confidence": _confidence(len(members), len({m["handle"] for m in members})),
+            "confidence": confidence,
             "lifecycle": _lifecycle([m["score"] for m in members]),
             "adapted_hook": a.get("adapted_hook"), "format": a.get("format"),
             "length_s": a.get("length_s"), "test_target": a.get("test_target"),
@@ -320,11 +357,10 @@ def _run_lane(conn, project, budget: Budget, lane: str) -> None:
     if "reels" in platforms:
         collected.append(_collect_reels(conn, project, budget, lane))
 
-    ranked_sets = [r for r in collected if r]
-    if not ranked_sets:
-        return
-    db.clear_concepts(conn, project["id"], lane)  # clear once, then cluster each platform separately
-    for ranked in ranked_sets:
+    # Always clear this lane's old concepts — even with zero winners — so a stricter run can't
+    # leave stale/garbage concepts from a previous run showing (honest empty > stale).
+    db.clear_concepts(conn, project["id"], lane)
+    for ranked in [r for r in collected if r]:
         _cluster_and_adapt(conn, project, lane, ranked)
 
 

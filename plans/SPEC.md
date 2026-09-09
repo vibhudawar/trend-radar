@@ -175,6 +175,14 @@ outlier → transcript endpoint (spoken opening, no download, DataSource.fetch_t
 ### 4.5 Trending sounds (a signal, not a lane)
 Every candidate carries `audio_id`/`audio_title`. Aggregate sounds **bottom-up** across outliers → a **global Trending Songs tab** (across the user's projects, owner-scoped), **filterable by region** (region-set queries/accounts bias the ingested audio, so region is a first-class filter). Per sound: `#videos` using it, median `account_outperformance` of those videos, rising-vs-mature (velocity), and example clips. Stored via `trends` (`trend_type = 'sound'`) + `trend_members`. The client-facing suggestion is simply **"use this sound — it's trending"**; how they use it (including muting it to ride the trend) is their call, not ours. A top-down official chart by region is available via Apify (`novi/tiktok-music-trend-api`, §2.1) but is an **optional paid upgrade**, not the foundation.
 
+### 4.6 Evidence guardrails (trust — never present anecdote as proof)
+The tool's whole promise is *evidence-backed* recommendations, so a concept must be earned:
+- **Only proven winners are evidence.** A video may back a concept only if it has a **baseline** AND beat it by `MIN_OUTPERFORMANCE` (default 1.5×). No baseline ⇒ not proven ⇒ never shown as a "winning video." (Deep hook analysis runs only on these.)
+- **Suppress thin concepts.** A concept is surfaced only with ≥ `MIN_CONCEPT_VIDEOS` winning videos across ≥ `MIN_CONCEPT_CREATORS` distinct creators (defaults 2/2) — one creator's 3 clips is *their style*, not a trend. Below the bar → the lane shows an honest "no proven pattern yet — widen the net."
+- **Reserve budget for proof.** `ENRICH_RESERVE_FRAC` of the run cap is reserved for baseline/views calls so a pile of keyword searches can't starve the calls that establish a winner.
+- **Leverage the onboarding profile everywhere.** The business's product/audience/goal (§2.4) is fed into the **intent filter** (drop PR/event/off-goal content, not just "education"), **clustering**, and **adaptation** — so results are goal-matched, not generic.
+- **Show the structural mapping.** The UI shows each winner's *original* hook next to the *adapted* one, so the user sees the recommendation is that proven structure applied to their product — not a mysterious leap.
+
 ### Two lanes
 Run selection twice: **Rising now** (recency-filtered) and **Proven playbook** (all-time, no recency filter). Both surfaced separately.
 
