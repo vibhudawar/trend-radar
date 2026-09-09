@@ -35,21 +35,29 @@ analysis_status : 'pending' | 'done' | 'failed'
 credit_call   : 'trending' | 'profile' | 'video' | 'search'
 ```
 
+> **Live-schema note (code is source of truth — `packages/db/src/enums.ts`):** the shipped `credit_call` enum is `search | video_detail | author_videos | transcript`; Reels calls reuse these (`search` for reels-search, `author_videos` for the profile/baseline call, `video_detail` for post-detail). When audio expansion (§4.0 source #3) ships, add a **`song`** value for `fetch_song_videos`. `query_type` already includes **`account`** (competitor/niche seeds) and **`sound`** (audio-expansion seeds) — no new type needed. Keep enum edits additive; never rename an in-use value.
+
 ---
 
 ## 3. Tables
 
-### 3.1 `niches`
-A tracked space we produce content for.
+### 3.1 `niches` → shipped as `projects`
+A tracked space we produce content for. **In code this table is `projects`** (one per onboarded business). Live columns beyond the below: `owner_id` (auth.users — owner-scoped reads/RLS), `product_url`, `product_description`, `audience`, `job_to_be_done`, `region` (**user-set, never inferred — §SPEC 2.4**), `status`, `last_refreshed_at`, `last_run_credits`.
 
 | col | type | notes |
 |---|---|---|
 | id | uuid pk | |
 | workspace_id | uuid | RLS-ready |
+| owner_id | uuid | Supabase `auth.users.id`; all reads scoped to this |
 | name | text not null | "IN ecom sellers", "US SaaS" |
 | product | text | which of our products this feeds (ecombox/gymos/…) |
 | platforms | platform[] not null | which platforms to ingest for this niche |
 | created_at / updated_at / deleted_at | timestamptz | |
+
+**Onboarding v2 (SPEC §2.4) capture** — AI pre-fills from the pasted URL, user edits:
+- **seed keywords, competitor accounts, own accounts, audio seeds** → rows in `queries` (types `keyword` / `account` / `sound`; own accounts flagged `is_own`, §3.2).
+- **competitor websites + own product URL** → project columns (`product_url`; add `competitor_urls text[]` when built) — used by the onboarding LLM for context, not by the worker's search.
+- **top-performing content** (optional) → stored as `queries(type='account', is_own=true)` members or a light `own_winners` list; feeds adaptation + de-dup.
 
 ### 3.2 `queries`
 Seed inputs that drive ingestion for a niche.
@@ -61,11 +69,12 @@ Seed inputs that drive ingestion for a niche.
 | platform | platform not null | |
 | type | query_type not null | hashtag / keyword / sound / account |
 | value | text not null | `#amazonseller`, `amazon seller india`, an audio_id, a handle |
+| is_own | boolean not null default false | for `type='account'`: the client's OWN account — mine for current style + **exclude from recommendations**, don't treat as a discovery win |
 | active | boolean not null default true | pause without deleting |
 | last_run_at | timestamptz | |
 | created_at / deleted_at | timestamptz | |
 
-Unique: `(niche_id, platform, type, value)`.
+Unique: `(niche_id, platform, type, value)`. Discovery (SPEC §4.0) reads these: `type='keyword'` → search, `type='account'` (competitor/niche, `is_own=false`) → account mining, `type='sound'` → audio expansion. Competitor accounts are **additive seeds, never a filter**.
 
 ### 3.3 `authors`
 A creator account. One per `(platform, handle)`.
@@ -209,7 +218,7 @@ Join: which videos back which concept.
 PK: `(concept_id, video_id)`.
 
 ### 3.10 `trends`
-Layer 3 clusters (Phase 3).
+Layer 3 clusters (Phase 3). **Also backs the global Trending Songs tab (SPEC §4.5):** `type='sound'`, `key=audio_id`. That tab aggregates `videos.audio_id` across the owner's projects (bottom-up), filterable by **region** via the owning project's `region`; per-sound metrics (usage, median outperformance, rising/mature) may be materialized here or computed live from `videos`+`scores`.
 
 | col | type | notes |
 |---|---|---|

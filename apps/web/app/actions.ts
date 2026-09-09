@@ -24,15 +24,21 @@ export async function analyzeUrlAction(
   }
 }
 
+const clean = (arr: unknown) =>
+  z.array(z.string()).catch([]).parse(arr).map((s) => s.trim().replace(/^@/, "")).filter(Boolean);
+
 const CreateInput = z.object({
-  name: z.string().min(1),
+  name: z.string().min(1, "Business name is required"),
   productUrl: z.string().optional(),
   productDescription: z.string().optional(),
   audience: z.string().optional(),
   jobToBeDone: z.string().optional(),
-  region: z.string().optional(),
+  region: z.string().min(1, "Region is required"), // user-set, never inferred
   platforms: z.array(z.enum(["tiktok", "reels"])).min(1),
   seedQueries: z.array(z.string()).default([]),
+  competitors: z.array(z.string()).default([]), // niche/competitor account handles
+  ownAccounts: z.array(z.string()).default([]), // the client's own handles
+  competitorUrls: z.array(z.string()).default([]),
 });
 
 export async function createProjectAction(formData: FormData): Promise<void> {
@@ -43,14 +49,14 @@ export async function createProjectAction(formData: FormData): Promise<void> {
     productDescription: formData.get("productDescription") || undefined,
     audience: formData.get("audience") || undefined,
     jobToBeDone: formData.get("jobToBeDone") || undefined,
-    region: formData.get("region") || undefined,
+    region: (formData.get("region") as string)?.trim(),
     platforms: platformsRaw.length ? platformsRaw : ["tiktok"],
-    seedQueries: String(formData.get("seedQueries") ?? "")
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean),
+    seedQueries: clean(formData.getAll("seedQueries")),
+    competitors: clean(formData.getAll("competitors")),
+    ownAccounts: clean(formData.getAll("ownAccounts")),
+    competitorUrls: clean(formData.getAll("competitorUrls")),
   });
-  if (!parsed.success) throw new Error("Invalid project input");
+  if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? "Invalid project input");
   const p = parsed.data;
   const uid = await requireUserId();
 
@@ -65,22 +71,22 @@ export async function createProjectAction(formData: FormData): Promise<void> {
       audience: p.audience,
       jobToBeDone: p.jobToBeDone,
       region: p.region,
+      competitorUrls: p.competitorUrls.length ? p.competitorUrls : null,
       platforms: p.platforms,
     })
     .returning({ id: projects.id });
 
-  if (row && p.seedQueries.length) {
-    // one row per (platform, query) so the worker's per-platform ingest finds seeds for each
-    await d.insert(queries).values(
-      p.platforms.flatMap((pl) =>
-        p.seedQueries.map((value) => ({
-          projectId: row.id,
-          platform: pl,
-          type: "keyword" as const,
-          value,
-        })),
-      ),
-    );
+  if (row) {
+    // Seeds drive the worker's 3-source discovery: keyword search + account mining (SPEC §4.0).
+    const own = new Set(p.ownAccounts.map((h) => h.toLowerCase()));
+    const competitors = p.competitors.filter((h) => !own.has(h.toLowerCase())); // own wins on overlap
+    // One row per (platform, seed) so per-platform ingest finds each; dedupe handles overlap.
+    const rows = p.platforms.flatMap((pl) => [
+      ...p.seedQueries.map((value) => ({ projectId: row.id, platform: pl, type: "keyword" as const, value, isOwn: false })),
+      ...competitors.map((value) => ({ projectId: row.id, platform: pl, type: "account" as const, value, isOwn: false })),
+      ...p.ownAccounts.map((value) => ({ projectId: row.id, platform: pl, type: "account" as const, value, isOwn: true })),
+    ]);
+    if (rows.length) await d.insert(queries).values(rows);
   }
   redirect(row ? `/projects/${row.id}` : "/");
 }

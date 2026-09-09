@@ -9,9 +9,10 @@ export const ProposedProfile = z.object({
   productDescription: z.string(),
   audience: z.string(),
   jobToBeDone: z.string(),
-  region: z.string(),
+  // region is intentionally NOT proposed — the user sets it (we never infer market).
   platforms: z.array(z.enum(["tiktok", "reels"])),
   seedQueries: z.array(z.string()).max(8),
+  competitors: z.array(z.string()).max(8), // suggested competitor/niche social handles to learn from
 });
 export type ProposedProfile = z.infer<typeof ProposedProfile>;
 
@@ -23,17 +24,22 @@ export async function proposeProfileFromUrl(url: string): Promise<ProposedProfil
   const client = new OpenAI({ apiKey: key });
 
   const prompt = `You onboard a business into a UGC content-intelligence tool. From the product page text,
-infer the marketing job-to-be-done and the GOAL-MATCHED search seeds (how products/tools LIKE this are
-pitched via short-form video — NOT the product's topic). Return ONLY JSON:
+infer the marketing job-to-be-done and how products/tools LIKE this are pitched via short-form video
+(the GOAL, not the product's topic). Return ONLY JSON:
 {
   "name": business name,
   "productDescription": one tight paragraph of what it does (used to adapt hooks),
   "audience": who they sell to,
   "jobToBeDone": e.g. "get X to sign up/buy",
-  "region": 2-letter market (US/IN/...),
   "platforms": subset of ["tiktok","reels"] that fits the audience,
-  "seedQueries": 4-6 goal-matched keyword queries for finding comparable winning ads
+  "seedQueries": 5-7 SHORT search seeds (2-4 words each, keyword/hashtag style like a creator would
+     tag or search — e.g. "amazon seller tips", "fix broken listings". NEVER full sentences; long
+     phrases wreck search recall, especially on Instagram),
+  "competitors": up to 6 competitor or niche creator/brand social handles (no leading @) that post
+     pitch-style short-form for this audience — real, well-known ones; omit if unsure rather than invent
 }
+
+Do NOT include region/market — the user sets that themselves.
 
 PRODUCT URL: ${finalUrl}
 PAGE TEXT:
@@ -45,5 +51,5 @@ ${text}`;
     response_format: { type: "json_object" },
   });
   const raw = JSON.parse(r.choices[0]?.message?.content ?? "{}");
-  return ProposedProfile.parse(raw);
+  return ProposedProfile.parse({ competitors: [], ...raw });
 }
