@@ -195,6 +195,8 @@ Retry every external call once with backoff; cache intent + hook + analysis by `
 
 ## 6. Design system (dashboard)
 
+> **Canonical UI/UX = `DESIGN.md`** (role lens, north stars, onboarding single-screen, the conversion moment, IA, visual language). The below is the quick reference; DESIGN.md wins on any conflict.
+
 - **Desktop-first, data-dense.** This is an analyst tool — the primary view is a wide, sortable table of ranked breakout videos at ~1280px+, collapsing to cards on mobile.
 - **Dark theme primary** (matches the UGC Pulse reference and reduces eye strain for long review sessions); light mode a fast-follow.
 - **Signature surfaces:**
