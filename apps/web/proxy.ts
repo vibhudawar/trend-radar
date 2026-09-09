@@ -2,7 +2,8 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 // Refreshes the Supabase session cookie and gates the app behind login.
-export async function middleware(request: NextRequest) {
+// (Next 16 renamed the `middleware` convention to `proxy`.)
+export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
