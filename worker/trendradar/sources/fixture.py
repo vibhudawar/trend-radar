@@ -63,17 +63,29 @@ def instagram_post_views(url: str) -> int | None:
     return m.get("video_play_count") or m.get("video_view_count")
 
 
-def instagram_profile(handle: str) -> dict[str, Any]:
+def _ig_profile_body(handle: str) -> dict[str, Any] | None:
     profiles = _load("ig_profiles.json") or {}
-    body = profiles.get(handle)
+    return profiles.get(handle) or (next(iter(profiles.values()), None))  # any cached profile
+
+
+def instagram_profile(handle: str) -> dict[str, Any]:
+    body = _ig_profile_body(handle)
     if not body:
         return {"follower_count": None, "baseline_median_views": None, "is_verified": None}
-    u = (body.get("data") or {}).get("user") or {}
-    followers = (u.get("edge_followed_by") or {}).get("count")
-    edges = (u.get("edge_owner_to_timeline_media") or {}).get("edges") or []
-    plays = [p for p in (e.get("node", {}).get("video_play_count") for e in edges) if p]
-    return {
-        "follower_count": followers,
-        "baseline_median_views": int(_st.median(plays)) if plays else None,
-        "is_verified": bool(u.get("is_verified")) or None,
-    }
+    p = sc.parse_ig_profile(body, handle)
+    return {k: p[k] for k in ("follower_count", "baseline_median_views", "is_verified")}
+
+
+def instagram_author_videos(handle: str) -> dict[str, Any]:
+    body = _ig_profile_body(handle)
+    if not body:
+        return {"follower_count": None, "baseline_median_views": None, "is_verified": None, "videos": []}
+    return sc.parse_ig_profile(body, handle)
+
+
+def tiktok_author_videos(handle: str) -> list[dict[str, Any]]:
+    # no cached TikTok profile-videos fixture → replay a slice of the search fixture as this account's videos
+    vids = search_tiktok("")[:6]
+    for v in vids:
+        v["handle"] = handle
+    return vids
