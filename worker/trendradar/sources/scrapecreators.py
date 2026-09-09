@@ -41,38 +41,54 @@ def _mp4(a: dict) -> str | None:
     return None
 
 
+def _aweme_to_video(a: dict[str, Any]) -> dict[str, Any]:
+    """One TikTok aweme object → our normalized video dict (shared by search + profile-videos)."""
+    s = a.get("statistics", {}) or {}
+    au = a.get("author", {}) or {}
+    audio_id, audio_title = _music(a)
+    return {
+        "platform": "tiktok",
+        "video_id": str(a.get("aweme_id")),
+        "handle": au.get("unique_id"),
+        "is_verified": bool(au.get("custom_verify")) or None,
+        "follower_count": au.get("follower_count"),
+        "caption": a.get("desc") or "",
+        "audio_id": audio_id, "audio_title": audio_title,
+        "url": a.get("url") or a.get("share_url"),
+        "mp4": _mp4(a),
+        "duration_s": round((a.get("video") or {}).get("duration", 0) / 1000) or None,
+        "create_time": a.get("create_time"),  # unix seconds
+        "view_count": s.get("play_count"),
+        "like_count": s.get("digg_count"),
+        "comment_count": s.get("comment_count"),
+        "share_count": s.get("share_count"),
+        "save_count": s.get("collect_count"),
+    }
+
+
 def parse_search(body: dict[str, Any]) -> list[dict[str, Any]]:
     """Normalize a TikTok keyword-search body into our video dicts (shared by live + fixture)."""
-    out: list[dict[str, Any]] = []
-    for it in body.get("search_item_list", []):
-        a = it.get("aweme_info", {})
-        s = a.get("statistics", {}) or {}
-        au = a.get("author", {}) or {}
-        audio_id, audio_title = _music(a)
-        out.append({
-            "platform": "tiktok",
-            "video_id": str(a.get("aweme_id")),
-            "handle": au.get("unique_id"),
-            "is_verified": bool(au.get("custom_verify")) or None,
-            "follower_count": au.get("follower_count"),
-            "caption": a.get("desc") or "",
-            "audio_id": audio_id, "audio_title": audio_title,
-            "url": a.get("url") or a.get("share_url"),
-            "mp4": _mp4(a),
-            "duration_s": round((a.get("video") or {}).get("duration", 0) / 1000) or None,
-            "create_time": a.get("create_time"),  # unix seconds
-            "view_count": s.get("play_count"),
-            "like_count": s.get("digg_count"),
-            "comment_count": s.get("comment_count"),
-            "share_count": s.get("share_count"),
-            "save_count": s.get("collect_count"),
-        })
-    return out
+    return [_aweme_to_video(it.get("aweme_info", {})) for it in body.get("search_item_list", [])]
 
 
 def search_tiktok(query: str) -> list[dict[str, Any]]:
     """Keyword search (live) — returns normalized videos with full metrics inline."""
     return parse_search(_get("/v1/tiktok/search/keyword", {"query": query}))
+
+
+def parse_tiktok_author_videos(body: dict[str, Any], handle: str) -> list[dict[str, Any]]:
+    out = []
+    for a in (body.get("aweme_list") or []):
+        v = _aweme_to_video(a)
+        v["handle"] = v["handle"] or handle  # profile-videos may omit the author block
+        if v["video_id"] and v["video_id"] != "None":
+            out.append(v)
+    return out
+
+
+def tiktok_author_videos(handle: str) -> list[dict[str, Any]]:
+    """Account mining (§4.0 source #2): the creator's recent videos as candidates + baseline source."""
+    return parse_tiktok_author_videos(_get("/v3/tiktok/profile/videos", {"handle": handle}), handle)
 
 
 def tiktok_author_baseline(handle: str) -> int | None:
@@ -154,16 +170,53 @@ def instagram_post_views(url: str) -> int | None:
     return m.get("video_play_count") or m.get("video_view_count")
 
 
-def instagram_profile(handle: str) -> dict[str, Any]:
-    """One call → follower count + account baseline (median views of recent reels)."""
-    body = _get("/v1/instagram/profile", {"handle": handle})
-    u = (body.get("data") or {}).get("user") or {}
-    followers = (u.get("edge_followed_by") or {}).get("count")
-    edges = (u.get("edge_owner_to_timeline_media") or {}).get("edges") or []
-    plays = [e.get("node", {}).get("video_play_count") for e in edges]
-    plays = [p for p in plays if p]
+def _ig_node_to_video(n: dict[str, Any], handle: str) -> dict[str, Any]:
+    """One profile-timeline node → our reel video dict. Views (`video_play_count`) are inline here."""
+    cap = (n.get("edge_media_to_caption") or {}).get("edges") or []
+    m = n.get("clips_music_attribution_info") or {}
+    aid = m.get("audio_id") or m.get("id")
+    sc_code = n.get("shortcode")
     return {
-        "follower_count": followers,
+        "platform": "reels",
+        "video_id": str(n.get("id") or sc_code),
+        "handle": (n.get("owner") or {}).get("username") or handle,
+        "is_verified": None,
+        "follower_count": None,  # set by caller from the profile
+        "caption": (cap[0].get("node", {}).get("text") if cap else "") or "",
+        "audio_id": str(aid) if aid else None,
+        "audio_title": m.get("song_name") or m.get("title"),
+        "url": f"https://www.instagram.com/reel/{sc_code}/" if sc_code else None,
+        "mp4": n.get("video_url"),
+        "duration_s": round(n["video_duration"]) if n.get("video_duration") else None,
+        "create_time": n.get("taken_at_timestamp"),
+        "view_count": n.get("video_play_count"),
+        "like_count": (n.get("edge_media_preview_like") or {}).get("count"),
+        "comment_count": (n.get("edge_media_to_comment") or n.get("edge_media_preview_comment") or {}).get("count"),
+        "share_count": None, "save_count": None,
+    }
+
+
+def parse_ig_profile(body: dict[str, Any], handle: str) -> dict[str, Any]:
+    """Profile body → followers + account baseline + the creator's recent reels (views inline)."""
+    u = (body.get("data") or {}).get("user") or {}
+    edges = (u.get("edge_owner_to_timeline_media") or {}).get("edges") or []
+    vids = [_ig_node_to_video(e.get("node") or {}, handle) for e in edges]
+    vids = [v for v in vids if v["video_id"] and v.get("view_count")]  # video reels with views only
+    plays = [v["view_count"] for v in vids]
+    return {
+        "follower_count": (u.get("edge_followed_by") or {}).get("count"),
         "baseline_median_views": int(st.median(plays)) if plays else None,
         "is_verified": bool(u.get("is_verified")) or None,
+        "videos": vids,
     }
+
+
+def instagram_profile(handle: str) -> dict[str, Any]:
+    """One call → follower count + account baseline (median views of recent reels)."""
+    p = parse_ig_profile(_get("/v1/instagram/profile", {"handle": handle}), handle)
+    return {k: p[k] for k in ("follower_count", "baseline_median_views", "is_verified")}
+
+
+def instagram_author_videos(handle: str) -> dict[str, Any]:
+    """Account mining (§4.0 source #2): recent reels (views inline) + followers + baseline, one call."""
+    return parse_ig_profile(_get("/v1/instagram/profile", {"handle": handle}), handle)

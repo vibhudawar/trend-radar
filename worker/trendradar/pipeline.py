@@ -145,34 +145,51 @@ def _rank_and_hook(conn, budget: Budget, pitches: list[dict], *, allow_transcrip
     return ranked
 
 
+def _account_queries_first(queries: list[dict], platform: str) -> list[dict]:
+    """This platform's queries, account-mining first (cheap + high-yield → gets budget before search)."""
+    qs = [q for q in queries if q["platform"] == platform]
+    return sorted(qs, key=lambda q: 0 if (q["type"] == "account" and not q.get("is_own")) else 1)
+
+
 def _collect_tiktok(conn, project, budget: Budget, lane: str) -> list[dict]:
-    """Ingest → persist → intent → score → rank/hook for TikTok. Returns ranked outliers."""
+    """Discovery (§4.0): keyword search + account mining → persist → intent → score → rank/hook."""
     project_id = project["id"]
     videos: dict[str, dict] = {}
-    for q in db.get_queries(conn, project_id):
-        if q["platform"] != "tiktok":
-            continue
-        if not budget.spend("search"):
-            break
-        try:
-            raws = sc.search_tiktok(q["value"])
-        except Exception:  # noqa: BLE001 - one bad query shouldn't kill the lane
+    baselines: dict[str, int | None] = {}  # handle → baseline (mined accounts fill this for free)
+    for q in _account_queries_first(db.get_queries(conn, project_id), "tiktok"):
+        if q["type"] == "account" and not q.get("is_own"):
+            if not budget.spend("author_videos"):
+                continue
+            try:
+                raws = sc.tiktok_author_videos(q["value"])
+            except Exception:  # noqa: BLE001 - one bad account shouldn't kill the lane
+                continue
+            mv = [r["view_count"] for r in raws if r.get("view_count")]
+            if mv:
+                baselines[q["value"]] = int(st.median(mv))  # the mined account's own baseline, free
+        elif q["type"] == "keyword":
+            if not budget.spend("search"):
+                continue
+            try:
+                raws = sc.search_tiktok(q["value"])
+            except Exception:  # noqa: BLE001
+                continue
+        else:
             continue
         for v in raws:
             if not v.get("video_id") or not v.get("handle") or not _passes(v, lane):
                 continue
-            videos.setdefault(v["video_id"], v)  # dedupe on video_id
+            videos.setdefault(v["video_id"], v)  # dedupe on video_id (mined first wins)
     if not videos:
         return []
     for v in videos.values():
-        _persist(conn, project_id, v, "tiktok", None)
+        _persist(conn, project_id, v, "tiktok", baselines.get(v["handle"]))
 
     pitches = _intent_pitches(conn, list(videos.values()), mark=True)
     if not pitches:
         return []
 
-    # score with account baseline (fetched per unique handle, outliers matter → all pitches)
-    baselines: dict[str, int | None] = {}
+    # score with account baseline (mined accounts already known; others fetched per unique handle)
     for v in pitches:
         h = v["handle"]
         if h not in baselines:
@@ -189,52 +206,70 @@ def _collect_tiktok(conn, project, budget: Budget, lane: str) -> list[dict]:
 
 
 def _collect_reels(conn, project, budget: Budget, lane: str) -> list[dict]:
-    """Instagram Reels: search has no views/followers, so intent-filter on captions first,
-    then spend on profile (followers+baseline) + post-detail (views) for pitches only."""
+    """Discovery (§4.0): account mining (reels + views + baseline in ONE call) + keyword search
+    (needs per-reel enrichment). Intent-filter first, then only enrich the search pitches."""
     project_id = project["id"]
-    reels: dict[str, dict] = {}
-    for q in db.get_queries(conn, project_id):
-        if q["platform"] != "reels":
-            continue
-        if not budget.spend("search"):  # credit_call enum value (shared w/ TikTok search)
-            break
-        try:
-            raws = sc.search_instagram(q["value"])
-        except Exception:  # noqa: BLE001
-            continue
-        for v in raws:
-            if not v.get("video_id") or not v.get("handle") or _too_old(v, lane):
+    mined: dict[str, dict] = {}          # pre-enriched: views/followers/baseline inline
+    search_reels: dict[str, dict] = {}   # need profile + post-detail
+    profiles: dict[str, dict] = {}       # handle → {follower_count, baseline_median_views, is_verified}
+    for q in _account_queries_first(db.get_queries(conn, project_id), "reels"):
+        if q["type"] == "account" and not q.get("is_own"):
+            if not budget.spend("author_videos"):  # one call = reels + followers + baseline
                 continue
-            reels.setdefault(v["video_id"], v)
-    if not reels:
+            try:
+                prof = sc.instagram_author_videos(q["value"])
+            except Exception:  # noqa: BLE001
+                continue
+            profiles[q["value"]] = prof
+            for v in prof.get("videos", []):
+                v["follower_count"] = prof.get("follower_count")
+                if not v.get("video_id") or _too_old(v, lane):
+                    continue
+                mined.setdefault(v["video_id"], v)
+        elif q["type"] == "keyword":
+            if not budget.spend("search"):
+                continue
+            try:
+                raws = sc.search_instagram(q["value"])
+            except Exception:  # noqa: BLE001
+                continue
+            for v in raws:
+                if not v.get("video_id") or not v.get("handle") or _too_old(v, lane):
+                    continue
+                search_reels.setdefault(v["video_id"], v)
+    for vid in mined:
+        search_reels.pop(vid, None)  # a mined reel already has views → don't re-fetch via search
+    if not mined and not search_reels:
         return []
 
-    # intent first (on captions) — avoids spending credits enriching education content
-    pitches = _intent_pitches(conn, list(reels.values()), mark=False)
+    # intent on captions across both pools — before spending on search-reel enrichment
+    pitches = _intent_pitches(conn, list(mined.values()) + list(search_reels.values()), mark=False)
     if not pitches:
         return []
 
-    profiles: dict[str, dict] = {}
     scored: list[dict] = []
     for v in pitches:
         h = v["handle"]
-        if h not in profiles:
-            profiles[h] = {"follower_count": None, "baseline_median_views": None, "is_verified": None}
-            if budget.spend("author_videos"):  # profile call = followers + account baseline
+        if v["video_id"] in mined:
+            baseline = (profiles.get(h) or {}).get("baseline_median_views")  # already enriched, free
+        else:
+            if h not in profiles:
+                profiles[h] = {"follower_count": None, "baseline_median_views": None, "is_verified": None}
+                if budget.spend("author_videos"):  # profile = followers + baseline
+                    try:
+                        profiles[h] = sc.instagram_profile(h)
+                    except Exception:  # noqa: BLE001
+                        pass
+            if v.get("url") and budget.spend("video_detail"):  # per-reel views (Post/Reel Info)
                 try:
-                    profiles[h] = sc.instagram_profile(h)
+                    v["view_count"] = sc.instagram_post_views(v["url"])
                 except Exception:  # noqa: BLE001
-                    pass
-        if v.get("url") and budget.spend("video_detail"):  # per-reel views (Post/Reel Info)
-            try:
-                v["view_count"] = sc.instagram_post_views(v["url"])
-            except Exception:  # noqa: BLE001
-                v["view_count"] = None
-        v["follower_count"] = profiles[h]["follower_count"]
-        v["is_verified"] = v.get("is_verified") or profiles[h]["is_verified"]
+                    v["view_count"] = None
+            v["follower_count"] = profiles[h].get("follower_count")
+            v["is_verified"] = v.get("is_verified") or profiles[h].get("is_verified")
+            baseline = profiles[h].get("baseline_median_views")
         if not _passes(v, lane):  # MIN_VIEWS now applies (views known)
             continue
-        baseline = profiles[h]["baseline_median_views"]
         _persist(conn, project_id, v, "reels", baseline)
         db.set_video_content_type(conn, v["uuid"], "pitch")
         v["score"] = score_video(v, baseline, lane)
