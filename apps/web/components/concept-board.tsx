@@ -24,7 +24,7 @@ export type ConceptView = {
   lengthS: number | null;
   testTarget: string | null;
   script: Beat[];
-  videos: { handle: string | null; url: string }[];
+  videos: { handle: string | null; url: string; hook: string | null }[];
 };
 
 const CONF: Record<string, string> = {
@@ -84,8 +84,11 @@ function Lane({ lane, items }: { lane: "rising" | "proven"; items: ConceptView[]
   if (items.length === 0) {
     return (
       <Card className="p-10 text-center">
-        <p className="text-sm font-medium">No concepts in this lane yet</p>
-        <p className="text-muted-foreground mt-1 text-sm">Hit Refresh to run the pipeline and populate it.</p>
+        <p className="text-sm font-medium">No proven pattern here yet</p>
+        <p className="text-muted-foreground mx-auto mt-1 max-w-md text-sm">
+          We only surface hooks backed by multiple winning videos across at least two creators — no anecdotes.
+          Add more competitor accounts, broaden the keywords, or run with a higher cap to widen the net.
+        </p>
       </Card>
     );
   }
@@ -166,15 +169,21 @@ function ConceptCard({ c, recommend }: {
 
         {c.videos.length > 0 ? (
           <Disclosure open={showVideos} onToggle={() => setShowVideos((v) => !v)}
-            icon={<PlayCircle className="size-4" />} label={`Real examples to watch (${c.videos.length})`}>
-            <div className="mt-2 flex flex-wrap gap-2">
+            icon={<PlayCircle className="size-4" />} label={`Proof — the winning videos (${c.videos.length})`}>
+            <p className="text-muted-foreground mt-2 text-xs">
+              Real videos that beat their creator's own average with this hook structure. Your hook above reworks it for your product.
+            </p>
+            <ul className="mt-2 flex flex-col gap-2">
               {c.videos.map((v, i) => (
-                <a key={i} href={v.url} target="_blank" rel="noreferrer"
-                  className="bg-muted/60 hover:bg-muted flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors">
-                  @{v.handle ?? "creator"} <PlayCircle className="size-3.5 opacity-70" />
-                </a>
+                <li key={i} className="bg-muted/40 rounded-lg border p-2.5">
+                  {v.hook ? <p className="text-[13px] leading-snug">“{v.hook}”</p> : null}
+                  <a href={v.url} target="_blank" rel="noreferrer"
+                    className="text-muted-foreground hover:text-foreground mt-1 inline-flex items-center gap-1 text-xs font-medium transition-colors">
+                    @{v.handle ?? "creator"} — watch <PlayCircle className="size-3.5 opacity-70" />
+                  </a>
+                </li>
               ))}
-            </div>
+            </ul>
           </Disclosure>
         ) : null}
       </div>

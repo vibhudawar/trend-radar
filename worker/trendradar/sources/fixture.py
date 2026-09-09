@@ -50,22 +50,27 @@ def _load(name: str) -> Any:
 
 
 def search_instagram(query: str) -> list[dict[str, Any]]:
-    reels = _load("ig_reels_search.json") or []
+    cap = _load("capture_search.json") or {}          # real captured dataset, keyed by query
+    reels = cap.get(query) or (_load("ig_reels_search.json") or [])
     return sc.parse_ig_search(reels)
 
 
 def instagram_post_views(url: str) -> int | None:
-    details = _load("ig_post_details.json") or {}
-    body = details.get(url)
-    if not body:
-        return None
-    m = ((body.get("data") or {}).get("xdt_shortcode_media")) or {}
-    return m.get("video_play_count") or m.get("video_view_count")
+    for f in ("capture_posts.json", "ig_post_details.json"):
+        d = _load(f) or {}
+        if url in d:
+            m = ((d[url].get("data") or {}).get("xdt_shortcode_media")) or {}
+            return m.get("video_play_count") or m.get("video_view_count")
+    return None
 
 
 def _ig_profile_body(handle: str) -> dict[str, Any] | None:
-    profiles = _load("ig_profiles.json") or {}
-    return profiles.get(handle) or (next(iter(profiles.values()), None))  # any cached profile
+    for f in ("capture_profiles.json", "ig_profiles.json"):
+        d = _load(f) or {}
+        if handle in d:
+            return d[handle]
+    generic = _load("ig_profiles.json") or {}
+    return next(iter(generic.values()), None)  # last resort: any cached profile
 
 
 def instagram_profile(handle: str) -> dict[str, Any]:

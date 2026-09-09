@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { and, eq, inArray } from "drizzle-orm";
-import { authors, conceptMembers, concepts, projects, queries, videos } from "@trendradar/db";
+import { analyses, authors, conceptMembers, concepts, projects, queries, videos } from "@trendradar/db";
 import { safe } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +11,7 @@ import { ConceptBoard, type ConceptView, type Beat } from "@/components/concept-
 
 export const dynamic = "force-dynamic";
 
-type Member = { conceptId: string; url: string; handle: string | null };
+type Member = { conceptId: string; url: string; handle: string | null; hook: string | null };
 
 function agoText(d: Date | null): string {
   if (!d) return "never refreshed";
@@ -36,19 +36,20 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
   const members = conceptIds.length
     ? await safe(
         (d) =>
-          d.select({ conceptId: conceptMembers.conceptId, url: videos.url, handle: authors.handle })
+          d.select({ conceptId: conceptMembers.conceptId, url: videos.url, handle: authors.handle, hook: analyses.hookText })
             .from(conceptMembers)
             .innerJoin(videos, eq(conceptMembers.videoId, videos.id))
             .leftJoin(authors, eq(videos.authorId, authors.id))
+            .leftJoin(analyses, eq(analyses.videoId, videos.id))
             .where(inArray(conceptMembers.conceptId, conceptIds)),
         [] as Member[],
       )
     : ([] as Member[]);
 
-  const vidsByConcept = new Map<string, { handle: string | null; url: string }[]>();
+  const vidsByConcept = new Map<string, { handle: string | null; url: string; hook: string | null }[]>();
   for (const m of members) {
     const list = vidsByConcept.get(m.conceptId) ?? [];
-    list.push({ handle: m.handle, url: m.url });
+    list.push({ handle: m.handle, url: m.url, hook: m.hook });
     vidsByConcept.set(m.conceptId, list);
   }
 

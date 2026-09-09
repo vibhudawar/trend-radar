@@ -32,6 +32,16 @@ RISING_MAX_AGE_DAYS = int(os.getenv("RISING_MAX_AGE_DAYS", "60"))
 MIN_VIEWS = int(os.getenv("MIN_VIEWS", "200"))
 TOP_OUTLIERS = int(os.getenv("TOP_OUTLIERS", "12"))  # how many to deep-analyze per lane
 
+# Evidence guardrails — never present non-winners as winners, or thin clusters as concepts.
+# A video only backs a concept if it BEAT its creator's own baseline by this much (needs a baseline).
+MIN_OUTPERFORMANCE = float(os.getenv("MIN_OUTPERFORMANCE", "1.5"))
+# A concept is only surfaced with at least this many winning videos AND distinct creators.
+MIN_CONCEPT_VIDEOS = int(os.getenv("MIN_CONCEPT_VIDEOS", "2"))
+MIN_CONCEPT_CREATORS = int(os.getenv("MIN_CONCEPT_CREATORS", "2"))
+# Reserve this fraction of the run cap for enrichment (baseline + views), so a pile of
+# keyword searches can't starve the calls that PROVE a video won.
+ENRICH_RESERVE_FRAC = float(os.getenv("ENRICH_RESERVE_FRAC", "0.5"))
+
 # SSRF: only download media from these trusted CDN host suffixes.
 MEDIA_HOST_SUFFIXES = (
     "tiktokcdn.com", "tiktokcdn-us.com", "tiktokv.com", "muscdn.com",
