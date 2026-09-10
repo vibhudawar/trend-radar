@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { projects, queries, type Platform } from "@trendradar/db";
@@ -89,6 +90,51 @@ export async function createProjectAction(formData: FormData): Promise<void> {
     if (rows.length) await d.insert(queries).values(rows);
   }
   redirect(row ? `/projects/${row.id}` : "/");
+}
+
+const UpdateInput = z.object({
+  name: z.string().min(1, "Business name is required"),
+  productUrl: z.string().optional(),
+  productDescription: z.string().optional(),
+  audience: z.string().optional(),
+  jobToBeDone: z.string().optional(),
+  region: z.string().min(1, "Region is required"),
+});
+
+// Edit the business details captured at onboarding (name/goal/about/audience/website/region).
+export async function updateProjectAction(
+  projectId: string,
+  formData: FormData,
+): Promise<{ ok: boolean; error?: string }> {
+  const uid = await requireUserId();
+  const parsed = UpdateInput.safeParse({
+    name: formData.get("name"),
+    productUrl: formData.get("productUrl") || undefined,
+    productDescription: formData.get("productDescription") || undefined,
+    audience: formData.get("audience") || undefined,
+    jobToBeDone: formData.get("jobToBeDone") || undefined,
+    region: (formData.get("region") as string)?.trim(),
+  });
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  const p = parsed.data;
+
+  const res = await db()
+    .update(projects)
+    .set({
+      name: p.name,
+      productUrl: p.productUrl ?? null,
+      productDescription: p.productDescription ?? null,
+      audience: p.audience ?? null,
+      jobToBeDone: p.jobToBeDone ?? null,
+      region: p.region,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(projects.id, projectId), eq(projects.ownerId, uid))) // ownership enforced
+    .returning({ id: projects.id });
+
+  if (!res.length) return { ok: false, error: "Project not found" };
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true };
 }
 
 // Trigger a pipeline run on the Python worker (fire-and-forget; worker updates project.status).
