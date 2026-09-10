@@ -102,8 +102,10 @@ export async function refreshProjectAction(projectId: string): Promise<{ ok: boo
   if (!owned.length) return { ok: false, error: "not found" };
 
   const base = process.env.WORKER_URL ?? "http://localhost:8000";
+  const headers: Record<string, string> = {};
+  if (process.env.WORKER_SECRET) headers["X-Worker-Secret"] = process.env.WORKER_SECRET;
   try {
-    const res = await fetch(`${base}/projects/${encodeURIComponent(projectId)}/refresh`, { method: "POST" });
+    const res = await fetch(`${base}/projects/${encodeURIComponent(projectId)}/refresh`, { method: "POST", headers });
     if (!res.ok && res.status !== 202) return { ok: false, error: `worker returned ${res.status}` };
     return { ok: true };
   } catch {
