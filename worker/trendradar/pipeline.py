@@ -137,12 +137,28 @@ def _persist(conn, project_id: str, v: dict, platform: str, baseline: int | None
                        save_count=v.get("save_count"))
 
 
-def _intent_pitches(conn, items: list[dict], *, mark: bool, context: str = "") -> list[dict]:
-    """LLM intent filter → keep only goal-relevant, copyable pitches (drop education/PR/off-goal)."""
-    keep = llm.classify_intent(items, context)
+def _intent_pitches(conn, project_id: str, items: list[dict], *, mark: bool, context: str = "") -> list[dict]:
+    """Goal-relevant pitch filter. Cached per (project, video_id) — the classifier is
+    non-deterministic, so we classify each video once and reuse the verdict (stable re-runs)."""
+    cached = db.get_cached_intent(conn, project_id)
+    verdict: dict[int, bool] = {}
+    todo: list[tuple[int, dict]] = []
+    for i, v in enumerate(items):
+        key = (v["platform"], v["video_id"])
+        if key in cached:
+            verdict[i] = cached[key]
+        else:
+            todo.append((i, v))
+    if todo:
+        fresh = llm.classify_intent([v for _, v in todo], context)  # keyed by position in `todo`
+        for local_idx, (gi, v) in enumerate(todo):
+            is_pitch = fresh.get(local_idx, False)
+            verdict[gi] = is_pitch
+            db.cache_intent(conn, project_id, v["platform"], v["video_id"], is_pitch)
+
     pitches = []
     for i, v in enumerate(items):
-        is_pitch = keep.get(i, False)
+        is_pitch = verdict.get(i, False)
         if mark and v.get("uuid"):
             db.set_video_content_type(conn, v["uuid"], "pitch" if is_pitch else "education")
         if is_pitch:
@@ -161,7 +177,11 @@ def _rank_and_hook(conn, budget: Budget, pitches: list[dict], *, allow_transcrip
     ranked = sorted([p for p in pitches if _is_winner(p)],
                     key=lambda p: p["score"]["composite"], reverse=True)[:TOP_OUTLIERS]
     for v in ranked:
-        _hook_for(conn, budget, v, allow_transcript=allow_transcript)
+        prior = db.has_analysis(conn, v["uuid"])  # reuse a prior hook → deterministic + no re-download (CDN URLs expire)
+        if prior:
+            v["hook_text"], v["format"] = prior["hook_text"], prior["format"]
+        else:
+            _hook_for(conn, budget, v, allow_transcript=allow_transcript)
     return ranked
 
 
@@ -205,7 +225,7 @@ def _collect_tiktok(conn, project, budget: Budget, lane: str) -> list[dict]:
     for v in videos.values():
         _persist(conn, project_id, v, "tiktok", baselines.get(v["handle"]))
 
-    pitches = _intent_pitches(conn, list(videos.values()), mark=True, context=_context(project))
+    pitches = _intent_pitches(conn, project_id, list(videos.values()), mark=True, context=_context(project))
     if not pitches:
         return []
 
@@ -263,7 +283,7 @@ def _collect_reels(conn, project, budget: Budget, lane: str) -> list[dict]:
         return []
 
     # intent on captions across both pools — before spending on search-reel enrichment
-    pitches = _intent_pitches(conn, list(mined.values()) + list(search_reels.values()),
+    pitches = _intent_pitches(conn, project_id, list(mined.values()) + list(search_reels.values()),
                               mark=False, context=_context(project))
     if not pitches:
         return []
@@ -376,6 +396,7 @@ def run_project(project_id: str) -> dict[str, Any]:
         with db.connect() as conn:
             budget = Budget(conn, project_id, CREDIT_CAP_PER_RUN)
             project = db.get_project(conn, project_id)
+            db.clear_scores(conn, project_id)  # replace derived scores each run (idempotent; snapshots still append)
             for lane in LANES:
                 _run_lane(conn, project, budget, lane)
             budget_used = budget.used

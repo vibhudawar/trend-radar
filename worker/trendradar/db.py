@@ -106,6 +106,29 @@ def set_video_content_type(conn: psycopg.Connection, video_uuid: str, content_ty
     conn.execute("update videos set content_type=%s where id=%s", (content_type, video_uuid))
 
 
+def get_cached_intent(conn: psycopg.Connection, project_id: str) -> dict[tuple[str, str], bool]:
+    """All cached intent verdicts for a project → {(platform, video_id): is_pitch}."""
+    rows = conn.execute(
+        "select platform, video_id, is_pitch from intent_cache where project_id=%s", (project_id,)
+    ).fetchall()
+    return {(r["platform"], r["video_id"]): r["is_pitch"] for r in rows}
+
+
+def cache_intent(conn: psycopg.Connection, project_id: str, platform: str, video_id: str, is_pitch: bool) -> None:
+    conn.execute(
+        """insert into intent_cache (project_id, platform, video_id, is_pitch) values (%s,%s,%s,%s)
+           on conflict (project_id, platform, video_id) do update set is_pitch=excluded.is_pitch""",
+        (project_id, platform, video_id, is_pitch),
+    )
+
+
+def has_analysis(conn: psycopg.Connection, video_uuid: str) -> dict[str, Any] | None:
+    """Existing hook analysis for a video (so we reuse it instead of re-running vision — deterministic)."""
+    return conn.execute(
+        "select hook_text, format from analyses where video_id=%s and status='done'", (video_uuid,)
+    ).fetchone()
+
+
 def append_snapshot(conn: psycopg.Connection, video_uuid: str, *, view_count: int | None,
                     like_count: int | None, comment_count: int | None,
                     share_count: int | None, save_count: int | None) -> None:
@@ -138,6 +161,13 @@ def upsert_analysis(conn: psycopg.Connection, video_uuid: str, a: dict[str, Any]
              hook_source=excluded.hook_source, format=excluded.format, structure=excluded.structure,
              replication_score=excluded.replication_score, updated_at=now()""",
         {**a, "video_id": video_uuid},
+    )
+
+
+def clear_scores(conn: psycopg.Connection, project_id: str) -> None:
+    """Scores are derived, not a time-series — replace them each run (unlike append-only snapshots)."""
+    conn.execute(
+        "delete from scores where video_id in (select id from videos where project_id=%s)", (project_id,)
     )
 
 
