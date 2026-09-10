@@ -9,6 +9,7 @@ import { RefreshButton } from "@/components/RefreshButton";
 import { RealtimeRefresh } from "@/components/RealtimeRefresh";
 import { ConceptBoard, type ConceptView, type Beat } from "@/components/concept-board";
 import { TrendingBoard, type TrendView } from "@/components/trending-board";
+import { EditProjectSheet } from "@/components/edit-project-sheet";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,17 @@ function agoText(d: Date | null): string {
   if (!d) return "never refreshed";
   const h = Math.floor((Date.now() - new Date(d).getTime()) / 3.6e6);
   return h < 1 ? "refreshed just now" : `refreshed ${h}h ago`;
+}
+
+// One labeled row in the project details card (label column + value).
+function ProjectField({ label, value }: { label: string; value: React.ReactNode | null }) {
+  if (!value) return null;
+  return (
+    <div className="grid gap-1 border-t px-4 py-3 first:border-t-0 sm:grid-cols-[104px_1fr] sm:gap-4 sm:py-3.5">
+      <div className="text-muted-foreground pt-0.5 text-[11px] font-semibold uppercase tracking-wide">{label}</div>
+      <div className="text-foreground/90 text-sm leading-relaxed">{value}</div>
+    </div>
+  );
 }
 
 export default async function ProjectDetail({ params }: { params: Promise<{ id: string }> }) {
@@ -117,10 +129,37 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
         {project.platforms.map((pl) => <Badge key={pl} variant="secondary">{pl}</Badge>)}
         {project.region ? <Badge variant="outline">{project.region}</Badge> : null}
       </div>
-      <h1 className="text-2xl font-bold tracking-tight">{project.name}</h1>
-      <p className="text-muted-foreground mt-1 max-w-2xl text-sm leading-relaxed">
-        {project.jobToBeDone}{project.jobToBeDone && project.productDescription ? " — " : ""}{project.productDescription}
-      </p>
+      <div className="flex items-center gap-2">
+        <h1 className="text-2xl font-bold tracking-tight">{project.name}</h1>
+        <EditProjectSheet
+          project={{
+            id: project.id,
+            name: project.name,
+            jobToBeDone: project.jobToBeDone,
+            productDescription: project.productDescription,
+            audience: project.audience,
+            productUrl: project.productUrl,
+            region: project.region,
+          }}
+        />
+      </div>
+
+      <Card className="mt-4 max-w-2xl gap-0 py-0">
+        <ProjectField label="Goal" value={project.jobToBeDone} />
+        <ProjectField label="About" value={project.productDescription} />
+        <ProjectField label="Audience" value={project.audience} />
+        <ProjectField
+          label="Website"
+          value={
+            project.productUrl ? (
+              <a href={project.productUrl} target="_blank" rel="noreferrer"
+                className="text-primary break-all hover:underline">
+                {project.productUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+              </a>
+            ) : null
+          }
+        />
+      </Card>
 
       <div className="mt-4 mb-7 flex flex-wrap items-center gap-3">
         <RefreshButton projectId={project.id} status={project.status} />
