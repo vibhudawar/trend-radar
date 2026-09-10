@@ -185,7 +185,7 @@ Every candidate carries `audio_id`/`audio_title`. Aggregate sounds **bottom-up**
 
 ### 4.6 Evidence guardrails (trust — never present anecdote as proof)
 The tool's whole promise is *evidence-backed* recommendations, so a concept must be earned:
-- **Only proven winners are evidence.** A video may back a concept only if it has a **baseline** AND beat it by `MIN_OUTPERFORMANCE` (default 1.5×). No baseline ⇒ not proven ⇒ never shown as a "winning video." (Deep hook analysis runs only on these.)
+- **Only proven winners are evidence.** A video may back a concept only if it has a **baseline** AND beat it by a **meaningful but not absurd** multiple — `MIN_OUTPERFORMANCE` (1.5×) ≤ outperformance ≤ `MAX_OUTPERFORMANCE` (75×). No baseline ⇒ not proven; a 300× multiple ⇒ a tiny/unreliable baseline artifact, not an insight. (Deep hook analysis runs only on these.)
 - **Suppress thin concepts.** A concept is surfaced only with ≥ `MIN_CONCEPT_VIDEOS` winning videos across ≥ `MIN_CONCEPT_CREATORS` distinct creators (defaults 2/2) — one creator's 3 clips is *their style*, not a trend. Below the bar → the lane shows an honest "no proven pattern yet — widen the net."
 - **Reserve budget for proof.** `ENRICH_RESERVE_FRAC` of the run cap is reserved for baseline/views calls so a pile of keyword searches can't starve the calls that establish a winner.
 - **Leverage the onboarding profile everywhere.** The business's product/audience/goal (§2.4) is fed into the **intent filter** (drop PR/event/off-goal content, not just "education"), **clustering**, and **adaptation** — so results are goal-matched, not generic.

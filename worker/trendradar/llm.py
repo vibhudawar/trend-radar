@@ -25,13 +25,13 @@ FormatType = Literal["talking-head", "before-after", "screen-record", "text-on-v
                      "voiceover-broll", "skit", "other"]
 
 
-class IntentItem(BaseModel):
+class PeerItem(BaseModel):
     idx: int
-    is_pitch: bool
+    is_peer: bool
 
 
-class IntentResult(BaseModel):
-    items: list[IntentItem]
+class PeerResult(BaseModel):
+    items: list[PeerItem]
 
 
 class OnscreenResult(BaseModel):
@@ -84,24 +84,27 @@ def _parse(model: str, content: Any, schema: type[BaseModel]) -> BaseModel:
     return parsed
 
 
-def classify_intent(items: list[dict[str, Any]], context: str = "") -> dict[int, bool]:
-    listing = "\n".join(f'{i}: {it.get("handle","?")} — {it["caption"][:200]}' for i, it in enumerate(items))
+def classify_peers(accounts: list[dict[str, Any]], context: str = "") -> dict[int, bool]:
+    """Account-level relevance (NORTH_STAR §3): is each account a PEER — competes for the SAME
+    audience with the SAME growth goal (same niche/space)? Not merely a creator who once touched
+    the topic. Judged from handle + bio + a few of the account's post captions."""
+    def acct_line(i: int, a: dict) -> str:
+        caps = " / ".join((a.get("sample_captions") or [])[:4])
+        return f'{i}: @{a.get("handle","?")} — bio: {(a.get("bio") or "")[:160]} — posts: {caps[:320]}'
+    listing = "\n".join(acct_line(i, a) for i, a in enumerate(accounts))
     prompt = (
-        "You screen short-form videos to find COPYABLE REFERENCE ADS for ONE specific business.\n"
+        "You build a PEER SET for one business/creator. A PEER competes for the SAME audience with "
+        "the SAME growth goal — i.e. it operates in the same niche/space (for a business: a rival "
+        "product/service in that space; for a creator: another creator in that content niche).\n"
         f"{context}\n\n"
-        "Keyword search drags in off-topic creators who merely MENTION a word. Be strict on TWO tests — "
-        "is_pitch=true ONLY if BOTH hold:\n"
-        "1) TOPICAL MATCH: the video is genuinely about this business's DOMAIN / the same problem space and "
-        "audience (not a food, travel, comedy, news, finance-in-general, or lifestyle creator who merely drops a "
-        "keyword or talks about money/cashback broadly).\n"
-        "2) PITCH/DEMO: it promotes a product/tool/service or shows a problem→solution/demo you could model an ad on.\n"
-        "is_pitch=false for anything off-domain, plus brand PR, event/festival recaps, award/'big deal' news, "
-        "founder interviews, generic education, storytime, or entertainment — even if it name-drops a related brand. "
-        "When unsure whether it's really in-domain, answer false.\n"
-        "Return one item per input index.\n\n" + listing
+        "For each account below, is_peer=true ONLY if it genuinely belongs in this peer set. "
+        "is_peer=false for off-niche creators (comedy, food, travel, generic finance/news, lifestyle) "
+        "and for anyone who merely MENTIONED the topic once but isn't actually in this space. Judge the "
+        "ACCOUNT as a whole (handle + bio + the mix of its posts), not a single post. When unsure, false.\n\n"
+        + listing
     )
-    res = _parse(MODEL_REASON, prompt, IntentResult)
-    return {it.idx: it.is_pitch for it in res.items}  # type: ignore[attr-defined]
+    res = _parse(MODEL_REASON, prompt, PeerResult)
+    return {it.idx: it.is_peer for it in res.items}  # type: ignore[attr-defined]
 
 
 def read_onscreen(frames_b64: list[str]) -> dict[str, Any]:

@@ -15,3 +15,8 @@ worker/venv/
 .pytest_cache/
 .DS_Store
 *.tsbuildinfo
+
+# installed research skills (ScrapeCreators/social-media-research-skills) — not part of the app
+.agents/
+.claude/skills/
+skills-lock.json
