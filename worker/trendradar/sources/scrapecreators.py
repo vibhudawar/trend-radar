@@ -338,8 +338,8 @@ def parse_trending_feed(body: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def tiktok_trending_sounds(region: str) -> tuple[list[dict[str, Any]], int]:
-    """Resilient global-chart fetch. Tries the true songs chart first (no region), falls back to the
-    region trending feed. Returns (sounds, credits_spent) — the caller does credit accounting."""
+    """Resilient TikTok chart fetch (US only in practice). Tries the true songs chart first (no
+    region), falls back to the region trending feed. Returns (sounds, credits_spent)."""
     try:
         songs = parse_popular_songs(_get("/v1/tiktok/songs/popular", {}))
         if songs:  # primary healthy — rank is the chart order
@@ -351,3 +351,76 @@ def tiktok_trending_sounds(region: str) -> tuple[list[dict[str, Any]], int]:
         pass
     feed = parse_trending_feed(_get("/v1/tiktok/get-trending-feed", {"region": region}))
     return feed, 1
+
+
+# --- Instagram trending sounds (region-native — the source for IN, and for the US IG toggle) -----
+# The reels/trending list is region-accurate but strips audio, so we enrich the top-N reels via
+# post-detail (which DOES carry the audio) and group by audio_id.
+
+def parse_ig_trending_reels(body: dict[str, Any]) -> list[dict[str, Any]]:
+    """reels/trending → [{url, play_count, handle}], sorted by plays desc (hottest first)."""
+    out = []
+    for r in (body.get("reels") or []):
+        if not r.get("url"):
+            continue
+        out.append({
+            "url": r["url"],
+            "play_count": r.get("play_count") or r.get("ig_play_count") or 0,
+            "handle": (r.get("user") or {}).get("username"),
+        })
+    return sorted(out, key=lambda x: -(x["play_count"] or 0))
+
+
+def instagram_trending_reels(region: str) -> list[dict[str, Any]]:
+    return parse_ig_trending_reels(_get("/v1/instagram/reels/trending", {"region": region}))
+
+
+def parse_ig_post_audio(body: dict[str, Any], example_url: str | None) -> dict[str, Any] | None:
+    """Pull the sound out of an instagram/post detail (clips_music_attribution_info + clips_metadata)."""
+    m = (body.get("data") or {}).get("xdt_shortcode_media") or {}
+    cmai = m.get("clips_music_attribution_info") or {}
+    cm = m.get("clips_metadata") or {}
+    mi = cm.get("music_info") or {}
+    mai = (mi.get("music_asset_info") or {}) if isinstance(mi, dict) else {}
+    osi = cm.get("original_sound_info") or {}
+    aid = (cmai.get("audio_id") or mai.get("audio_cluster_id") or osi.get("audio_asset_id"))
+    if not aid:
+        return None
+    is_original = bool(cmai.get("uses_original_audio") or (osi and not mai))
+    return {
+        "audio_id": str(aid),
+        "title": cmai.get("song_name") or mai.get("title") or osi.get("original_audio_title"),
+        "author": cmai.get("artist_name") or mai.get("display_artist") or (osi.get("ig_artist") or {}).get("username"),
+        "play_url": mai.get("progressive_download_url") or None,
+        "cover_url": mai.get("cover_artwork_thumbnail_uri") or mai.get("cover_artwork_uri") or None,
+        "is_original_sound": is_original,
+        "is_commerce_music": (not is_original) or None,
+        "example_url": example_url,
+    }
+
+
+def instagram_post_audio(url: str) -> dict[str, Any] | None:
+    return parse_ig_post_audio(_get("/v1/instagram/post", {"url": url}), url)
+
+
+def instagram_trending_sounds(region: str, top_n: int = 12) -> tuple[list[dict[str, Any]], int]:
+    """Region-native IG trending sounds: trending reels (1 credit) → enrich the top-N reels' audio
+    (1 credit each) → group by audio_id. Returns (sounds, credits_spent = 1 + reels_enriched)."""
+    reels = instagram_trending_reels(region)
+    spent = 1
+    by_id: dict[str, dict[str, Any]] = {}
+    for r in reels[:top_n]:
+        s = instagram_post_audio(r["url"])
+        spent += 1
+        if not s:
+            continue
+        g = by_id.get(s["audio_id"])
+        if g is None:
+            s["usage"] = 1
+            s["examples"] = [r["url"]]
+            by_id[s["audio_id"]] = s
+        else:
+            g["usage"] += 1
+            if len(g["examples"]) < 4:
+                g["examples"].append(r["url"])
+    return sorted(by_id.values(), key=lambda s: -s["usage"]), spent

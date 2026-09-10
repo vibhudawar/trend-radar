@@ -24,14 +24,15 @@ services:
       - key: WORKER_SECRET
         sync: false # set the SAME value here and on the web host (Vercel)
 
-  # Global Trending Songs chart refresh (SPEC §4.5). Fetches the trending sounds per region and
-  # upserts `trending_sounds`. Trending audio shifts over days, so once daily is plenty (~2 credits/day
-  # for US+IN). Runs the same entrypoint as `python refresh_trending_sounds.py US IN` locally.
+  # Trending Songs chart refresh (SPEC §4.5). Region-native per platform: IN=Instagram only,
+  # US=Instagram+TikTok. IG costs 1 + IG_TOP_N credits/region (enriches the top reels' audio), so
+  # ~2x/week keeps it fresh without heavy spend (~25 credits/refresh). Same entrypoint as
+  # `python refresh_trending_sounds.py IN US` locally.
   - type: cronjob
     name: trendradar-trending-sounds
     runtime: python
     rootDir: worker
-    schedule: "0 6 * * *" # daily 06:00 UTC (11:30 IST)
+    schedule: "0 6 * * 1,4" # Mon & Thu 06:00 UTC (~every 3 days)
     buildCommand: pip install -r requirements.txt
     startCommand: python refresh_trending_sounds.py # regions from TRENDING_REGIONS env
     envVars:
@@ -40,8 +41,10 @@ services:
       - key: DATA_SOURCE
         value: scrapecreators
       - key: TRENDING_REGIONS
-        value: US,IN # comma-separated; change here to add/remove chart countries
-      - key: DATABASE_URL
-        sync: false # set in dashboard (Supabase pooled connection string)
+        value: IN,US # comma-separated; IN→IG only, US→IG+TikTok (see REGION_PLATFORMS)
+      - key: IG_TOP_N
+        value: "12" # top trending reels enriched for audio per region (credits = 1 + IG_TOP_N)
       - key: SCRAPECREATORS_API_KEY
         sync: false # set in dashboard
+      - key: DATABASE_URL
+        sync: false # set in dashboard (Supabase pooled connection string)

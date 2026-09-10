@@ -271,21 +271,22 @@ export const trendingSounds = pgTable(
   "trending_sounds",
   {
     id: id(),
-    region: text("region").notNull(), // ISO country code (US, IN, …) — the one axis of the tab
-    audioId: text("audio_id").notNull(), // TikTok music.id_str (stable key)
+    region: text("region").notNull(), // ISO country code (US, IN) — first axis of the tab
+    platform: text("platform").notNull(), // 'instagram' | 'tiktok' — second axis (IN=IG only; US=both)
+    audioId: text("audio_id").notNull(), // stable audio key (TikTok music.id_str / IG audio_id)
     title: text("title"),
     author: text("author"),
     playUrl: text("play_url"), // audio stream url (preview)
     coverUrl: text("cover_url"),
-    isOriginalSound: boolean("is_original_sound"), // stored now; UI toggle later
+    isOriginalSound: boolean("is_original_sound"), // original audio vs licensed track
     isCommerceMusic: boolean("is_commerce_music"),
     usageSignal: integer("usage_signal").notNull().default(0), // rank / #trending videos carrying it
     exampleUrls: text("example_urls").array(),
     fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("trending_sounds_region_audio").on(t.region, t.audioId),
-    index("trending_sounds_region_rank").on(t.region, t.usageSignal),
+    uniqueIndex("trending_sounds_region_platform_audio").on(t.region, t.platform, t.audioId),
+    index("trending_sounds_region_platform_rank").on(t.region, t.platform, t.usageSignal),
   ],
 );
 

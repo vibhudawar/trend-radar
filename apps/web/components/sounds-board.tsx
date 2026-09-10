@@ -14,11 +14,24 @@ export type SoundRow = {
   examples: string[] | null;
   isOriginal: boolean | null;
   region: string;
+  platform: string;
 };
 
-// The global Trending Songs chart — region-keyed, NOT niche-scoped. Pick a country; ride a sound.
-export function SoundsBoard({ sounds, regions, activeRegion }: {
-  sounds: SoundRow[]; regions: string[]; activeRegion: string | null;
+const PLATFORM_LABEL: Record<string, string> = { instagram: "Instagram", tiktok: "TikTok" };
+
+// Trending Songs chart — region-native. Country selector, then a platform sub-filter (IN=IG only).
+export function SoundsBoard({
+  sounds,
+  regions,
+  activeRegion,
+  platforms,
+  activePlatform,
+}: {
+  sounds: SoundRow[];
+  regions: string[];
+  activeRegion: string | null;
+  platforms: string[];
+  activePlatform: string | null;
 }) {
   return (
     <div>
@@ -27,16 +40,35 @@ export function SoundsBoard({ sounds, regions, activeRegion }: {
         <h1 className="text-2xl font-bold tracking-tight">Trending Songs</h1>
       </div>
       <p className="text-muted-foreground mb-5 max-w-2xl text-sm leading-relaxed">
-        What&apos;s trending right now — globally, not by niche. Add a trending sound to your next
-        video (muted or not, your call) to catch the wave and boost reach.
+        What&apos;s trending right now, by country. Add a trending sound to your next video (muted or
+        not, your call) to catch the wave and boost reach.
       </p>
 
       {regions.length > 0 ? (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <span className="text-muted-foreground text-xs font-medium">Country:</span>
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="text-muted-foreground w-16 text-xs font-medium">Country</span>
           {regions.map((r) => (
-            <RegionChip key={r} label={r} href={`/sounds?region=${encodeURIComponent(r)}`} active={activeRegion === r} />
+            <Chip key={r} label={r} href={`/sounds?region=${encodeURIComponent(r)}`} active={activeRegion === r} />
           ))}
+        </div>
+      ) : null}
+
+      {platforms.length > 1 ? (
+        <div className="mb-5 flex flex-wrap items-center gap-2">
+          <span className="text-muted-foreground w-16 text-xs font-medium">Platform</span>
+          {platforms.map((p) => (
+            <Chip
+              key={p}
+              label={PLATFORM_LABEL[p] ?? p}
+              href={`/sounds?region=${encodeURIComponent(activeRegion ?? "")}&platform=${encodeURIComponent(p)}`}
+              active={activePlatform === p}
+            />
+          ))}
+        </div>
+      ) : platforms.length === 1 ? (
+        <div className="mb-5 flex items-center gap-2">
+          <span className="text-muted-foreground w-16 text-xs font-medium">Platform</span>
+          <Badge variant="outline" className="text-xs">{PLATFORM_LABEL[platforms[0]] ?? platforms[0]}</Badge>
         </div>
       ) : null}
 
@@ -45,7 +77,7 @@ export function SoundsBoard({ sounds, regions, activeRegion }: {
           <Music className="text-muted-foreground size-6" />
           <p className="text-base font-medium">No trending sounds yet</p>
           <p className="text-muted-foreground max-w-md text-sm">
-            The chart refreshes from the trending feed. Run{" "}
+            The chart refreshes every few days. Run{" "}
             <code className="text-xs">worker/refresh_trending_sounds.py</code> to populate it.
           </p>
         </Card>
@@ -97,7 +129,7 @@ export function SoundsBoard({ sounds, regions, activeRegion }: {
   );
 }
 
-function RegionChip({ label, href, active }: { label: string; href: string; active: boolean }) {
+function Chip({ label, href, active }: { label: string; href: string; active: boolean }) {
   return (
     <Link href={href}
       className={cn("rounded-md border px-2.5 py-0.5 text-xs font-medium no-underline transition-colors",
