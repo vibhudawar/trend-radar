@@ -11,6 +11,7 @@ import {
   timestamp,
   uniqueIndex,
   uuid,
+  vector,
 } from "drizzle-orm/pg-core";
 import {
   alertType,
@@ -252,7 +253,7 @@ export const trends = pgTable(
     type: trendType("type").notNull(),
     key: text("key").notNull(),
     label: text("label"),
-    status: trendStatus("status").notNull(),
+    status: trendStatus("status"), // null until the time-series trend engine (Phase 3) sets rising/peak/declining
     growthRate: numeric("growth_rate"),
     memberCount: integer("member_count").notNull().default(0),
     firstDetectedAt: timestamp("first_detected_at", { withTimezone: true }),
@@ -260,6 +261,17 @@ export const trends = pgTable(
   },
   (t) => [index("trends_project_status").on(t.projectId, t.status)],
 );
+
+// --- video_embeddings: pgvector store for the counting layer (NORTH_STAR §5). Compute-once —
+// the hook-proxy is embedded (text-embedding-3-small, 1536-dim) and reused across runs.
+// HNSW cosine index created in SQL (worker-managed): `using hnsw (embedding vector_cosine_ops)`.
+export const videoEmbeddings = pgTable("video_embeddings", {
+  videoId: uuid("video_id").primaryKey().references(() => videos.id, { onDelete: "cascade" }),
+  model: text("model").notNull(),
+  sourceHash: text("source_hash").notNull(), // md5 of the proxy text → re-embed only when it changes
+  embedding: vector("embedding", { dimensions: 1536 }).notNull(),
+  updatedAt: updatedAt(),
+});
 
 export const trendMembers = pgTable(
   "trend_members",

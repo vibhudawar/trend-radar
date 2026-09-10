@@ -5,3 +5,5 @@ openai>=1.55
 psycopg[binary]>=3.2
 opencv-python-headless>=4.10
 python-dotenv>=1.0
+pgvector
+numpy

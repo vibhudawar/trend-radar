@@ -231,8 +231,11 @@ Join: which videos back which concept.
 
 PK: `(concept_id, video_id)`.
 
+### 3.9b `video_embeddings` (pgvector — counting layer)
+Compute-once hook embeddings for the "N uses across M accounts" counting layer (NORTH_STAR §5). One row per video: `video_id` (pk → videos), `model`, `source_hash` (md5 of the proxy text — re-embed only when it changes), `embedding vector(1536)` (`text-embedding-3-small`), `updated_at`. HNSW cosine index (`using hnsw (embedding vector_cosine_ops)`). Requires `create extension vector` (Supabase-native pgvector; no Pinecone). Worker clusters greedily (cosine ≥ `CLUSTER_SIM_THRESHOLD`) → `trends`. Only produces output at scale (recurring hooks); a tiny/varied peer set yields none.
+
 ### 3.10 `trends`
-Layer 3 clusters (Phase 3). **Also backs the global Trending Songs tab (SPEC §4.5):** `type='sound'`, `key=audio_id`. That tab aggregates `videos.audio_id` across the owner's projects (bottom-up), filterable by **region** via the owning project's `region`; per-sound metrics (usage, median outperformance, rising/mature) may be materialized here or computed live from `videos`+`scores`.
+Layer 3 clusters (Phase 3). **Also backs the counting layer (hooks/sounds, §3.9b) and the global Trending Songs tab (SPEC §4.5):** `type='sound'`, `key=audio_id`. That tab aggregates `videos.audio_id` across the owner's projects (bottom-up), filterable by **region** via the owning project's `region`; per-sound metrics (usage, median outperformance, rising/mature) may be materialized here or computed live from `videos`+`scores`.
 
 | col | type | notes |
 |---|---|---|

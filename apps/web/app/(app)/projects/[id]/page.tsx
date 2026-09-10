@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { and, eq, inArray } from "drizzle-orm";
-import { analyses, authors, conceptMembers, concepts, projects, queries, videos } from "@trendradar/db";
+import { analyses, authors, conceptMembers, concepts, projects, queries, trends, trendMembers, videos } from "@trendradar/db";
 import { safe } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { RefreshButton } from "@/components/RefreshButton";
 import { RealtimeRefresh } from "@/components/RealtimeRefresh";
 import { ConceptBoard, type ConceptView, type Beat } from "@/components/concept-board";
+import { TrendingBoard, type TrendView } from "@/components/trending-board";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,31 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
   );
   const seeds = await safe((d) => d.select().from(queries).where(eq(queries.projectId, id)), [] as (typeof queries.$inferSelect)[]);
   const rows = await safe((d) => d.select().from(concepts).where(eq(concepts.projectId, id)), [] as (typeof concepts.$inferSelect)[]);
+
+  // Counting layer: "N uses across M accounts" trends (hooks + sounds).
+  const trendRows = await safe((d) => d.select().from(trends).where(eq(trends.projectId, id)), [] as (typeof trends.$inferSelect)[]);
+  const trendIds = trendRows.map((t) => t.id);
+  const trendMems = trendIds.length
+    ? await safe(
+        (d) =>
+          d.select({ trendId: trendMembers.trendId, handle: authors.handle, url: videos.url })
+            .from(trendMembers)
+            .innerJoin(videos, eq(trendMembers.videoId, videos.id))
+            .leftJoin(authors, eq(videos.authorId, authors.id))
+            .where(inArray(trendMembers.trendId, trendIds)),
+        [] as { trendId: string; handle: string | null; url: string }[],
+      )
+    : ([] as { trendId: string; handle: string | null; url: string }[]);
+  const trendViews: TrendView[] = trendRows
+    .map((t): TrendView => {
+      const mems = trendMems.filter((m) => m.trendId === t.id);
+      return {
+        id: t.id, type: t.type as TrendView["type"], label: t.label,
+        uses: t.memberCount, accounts: new Set(mems.map((m) => m.handle)).size,
+        examples: mems.slice(0, 5),
+      };
+    })
+    .sort((a, b) => b.accounts - a.accounts || b.uses - a.uses);
 
   const conceptIds = rows.map((r) => r.id);
   const members = conceptIds.length
@@ -105,6 +131,8 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
       </div>
 
       <ConceptBoard rising={rising} proven={proven} />
+
+      <TrendingBoard trends={trendViews} />
 
       <Card className="mt-6 gap-2 p-4">
         <div className="text-muted-foreground text-xs font-semibold uppercase tracking-wide">Seed queries ({seeds.length})</div>
