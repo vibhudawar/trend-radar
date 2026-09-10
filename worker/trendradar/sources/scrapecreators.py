@@ -218,6 +218,55 @@ def instagram_profile(handle: str) -> dict[str, Any]:
     return {k: p[k] for k in ("follower_count", "baseline_median_views", "is_verified")}
 
 
+def _ig_reel_item_to_video(it: dict[str, Any], handle: str) -> dict[str, Any]:
+    """One `instagram/user/reels` item → our reel dict. This endpoint carries the SOUND inline
+    (music_canonical_id) plus play_count/caption — unlike the profile-timeline, which omits audio."""
+    m = it.get("media") or it
+    cm = m.get("clips_metadata") or {}
+    osi = cm.get("original_sound_info") or {}
+    mi = cm.get("music_info") or {}
+    # canonical id groups the SAME sound across videos (best key for "N videos use this sound")
+    audio_id = (cm.get("music_canonical_id") or (cm.get("audio_ranking_info") or {}).get("best_audio_cluster_id")
+                or osi.get("audio_asset_id"))
+    audio_title = ((mi.get("music_asset_info") or {}).get("title") if mi else None) or osi.get("original_audio_title")
+    user = m.get("user") or {}
+    code = m.get("code")
+    vv = m.get("video_versions") or []
+    dur = m.get("video_duration")
+    return {
+        "platform": "reels",
+        "video_id": str(code or m.get("id") or m.get("pk")),
+        "handle": user.get("username") or handle,
+        "is_verified": bool(user.get("is_verified")) or None,
+        "follower_count": None,  # user/reels is reels-only; baseline (below) is the reliability signal
+        "caption": ((m.get("caption") or {}) or {}).get("text") or "",
+        "audio_id": str(audio_id) if audio_id else None,
+        "audio_title": audio_title,
+        "url": f"https://www.instagram.com/reel/{code}/" if code else None,
+        "mp4": vv[0].get("url") if vv else None,
+        "duration_s": round(dur) if dur else None,
+        "create_time": m.get("taken_at"),  # unix seconds
+        "view_count": m.get("play_count") or m.get("ig_play_count"),
+        "like_count": m.get("like_count"),
+        "comment_count": m.get("comment_count"),
+        "share_count": None, "save_count": None,
+    }
+
+
+def parse_ig_user_reels(body: dict[str, Any], handle: str) -> dict[str, Any]:
+    vids = [_ig_reel_item_to_video(it, handle) for it in (body.get("items") or [])]
+    vids = [v for v in vids if v["video_id"] and v["video_id"] != "None"]
+    plays = [v["view_count"] for v in vids if v.get("view_count")]
+    return {
+        "follower_count": None,
+        "baseline_median_views": int(st.median(plays)) if plays else None,
+        "is_verified": next((v["is_verified"] for v in vids if v.get("is_verified")), None),
+        "bio": "",  # not in this endpoint; peer confirmation uses the reels' captions instead
+        "videos": vids,
+    }
+
+
 def instagram_author_videos(handle: str) -> dict[str, Any]:
-    """Account mining (§4.0 source #2): recent reels (views inline) + followers + baseline, one call."""
-    return parse_ig_profile(_get("/v1/instagram/profile", {"handle": handle}), handle)
+    """Account mining (§4.0 source #2): recent reels WITH sound (music_canonical_id) + views +
+    captions + baseline, one call. Uses instagram/user/reels (carries audio; profile-timeline doesn't)."""
+    return parse_ig_user_reels(_get("/v1/instagram/user/reels", {"handle": handle}), handle)

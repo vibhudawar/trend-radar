@@ -345,6 +345,17 @@ def _hash(text: str) -> str:
     return hashlib.md5(text.lower().encode()).hexdigest()
 
 
+def _as_np(e: Any) -> np.ndarray:
+    """A stored embedding may come back as a numpy array, a pgvector Vector, or a list."""
+    if isinstance(e, np.ndarray):
+        return e.astype(float)
+    if hasattr(e, "to_numpy"):
+        return np.asarray(e.to_numpy(), dtype=float)
+    if hasattr(e, "to_list"):
+        return np.asarray(e.to_list(), dtype=float)
+    return np.asarray(list(e), dtype=float)
+
+
 def _count_trends(conn, project_id: str) -> None:
     """Tiered counting layer (NORTH_STAR §5): cheap "N uses across M accounts" over the WHOLE peer
     corpus. Hooks cluster on caption/on-screen text (embeddings stored in pgvector, compute-once);
@@ -352,35 +363,33 @@ def _count_trends(conn, project_id: str) -> None:
     rows = db.get_corpus_for_counting(conn, project_id)
     db.clear_trends(conn, project_id)
 
-    # HOOKS — proxy = deep hook (outliers) else caption's first line; embed once, reuse via pgvector
-    hook_rows = [r for r in rows if (r.get("hook_text") or _first_line(r.get("caption")))]
-    hook_rows.sort(key=lambda r: (r.get("views") or 0), reverse=True)  # top-views video = representative
-    proxies = {str(r["uuid"]): (r.get("hook_text") or _first_line(r.get("caption"))).strip() for r in hook_rows}
-    stored = db.get_stored_embeddings(conn, project_id)  # {video_id: (source_hash, embedding)}
-
-    to_embed = [(vid, p) for vid, p in proxies.items() if p and stored.get(vid, (None,))[0] != _hash(p)]
-    if to_embed:
-        try:
+    # HOOKS — proxy = deep hook (outliers) else caption's first line; embed once, reuse via pgvector.
+    # Wrapped so a hook failure can't block sound counting below.
+    try:
+        hook_rows = [r for r in rows if (r.get("hook_text") or _first_line(r.get("caption")))]
+        hook_rows.sort(key=lambda r: (r.get("views") or 0), reverse=True)  # top-views video = representative
+        proxies = {str(r["uuid"]): (r.get("hook_text") or _first_line(r.get("caption"))).strip() for r in hook_rows}
+        stored = db.get_stored_embeddings(conn, project_id)  # {video_id: (source_hash, embedding)}
+        to_embed = [(vid, p) for vid, p in proxies.items() if p and stored.get(vid, (None,))[0] != _hash(p)]
+        if to_embed:
             new_embs = llm.embed([p for _, p in to_embed])
-        except Exception:  # noqa: BLE001 - counting is best-effort
-            new_embs = []
-        for (vid, p), emb in zip(to_embed, new_embs):
-            db.upsert_embedding(conn, vid, EMBED_MODEL, _hash(p), emb)
-            stored[vid] = (_hash(p), np.asarray(emb, dtype=float))
+            for (vid, p), emb in zip(to_embed, new_embs):
+                db.upsert_embedding(conn, vid, EMBED_MODEL, _hash(p), emb)
+                stored[vid] = (_hash(p), np.asarray(emb, dtype=float))
+        order = [str(r["uuid"]) for r in hook_rows if str(r["uuid"]) in stored]
+        embs = [_as_np(stored[vid][1]) for vid in order]
+        if embs:
+            for cl in _greedy_cluster(embs, CLUSTER_SIM_THRESHOLD):
+                member_vids = [order[j] for j in cl]
+                if len(member_vids) < 2:
+                    continue
+                rep = proxies[member_vids[0]]
+                db.insert_trend(conn, project_id, ttype="hook", key="hook:" + _hash(rep)[:16],
+                                label=rep, member_uuids=member_vids)
+    except Exception:  # noqa: BLE001 - hook counting is best-effort
+        pass
 
-    order = [str(r["uuid"]) for r in hook_rows if str(r["uuid"]) in stored]
-    embs = [np.asarray(stored[vid][1], dtype=float) for vid in order]
-    if embs:
-        for cl in _greedy_cluster(embs, CLUSTER_SIM_THRESHOLD):
-            member_vids = [order[j] for j in cl]
-            if len(member_vids) < 2:
-                continue
-            rep = proxies[member_vids[0]]
-            db.insert_trend(conn, project_id, ttype="hook", key="hook:" + _hash(rep)[:16],
-                            label=rep, member_uuids=member_vids)
-
-    # SOUNDS — exact group by audio_id (free; feeds the Trending Songs surface). Needs audio_id on
-    # mined videos, which the IG profile-timeline currently omits → usually empty until fixed.
+    # SOUNDS — exact group by audio_id (from instagram/user/reels; music_canonical_id groups a sound).
     by_audio: dict[str, list[str]] = defaultdict(list)
     titles: dict[str, str | None] = {}
     for r in rows:
