@@ -77,6 +77,22 @@ export const queries = pgTable(
   (t) => [uniqueIndex("queries_unique").on(t.projectId, t.platform, t.type, t.value)],
 );
 
+// --- intent_cache: the intent-filter verdict per (project, video). Intent is context-dependent
+// (a video is a pitch for one business, off-goal for another) so it's keyed by project. Cached so
+// results don't drift run-to-run (the classifier is non-deterministic — classify once, reuse).
+export const intentCache = pgTable(
+  "intent_cache",
+  {
+    id: id(),
+    projectId: uuid("project_id").notNull().references(() => projects.id),
+    platform: platform("platform").notNull(),
+    videoId: text("video_id").notNull(), // external id (not our uuid — set before the video is persisted)
+    isPitch: boolean("is_pitch").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("intent_cache_unique").on(t.projectId, t.platform, t.videoId)],
+);
+
 // --- authors: a creator account; baseline_median_views = THE account baseline
 export const authors = pgTable(
   "authors",

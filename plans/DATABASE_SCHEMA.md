@@ -76,6 +76,20 @@ Seed inputs that drive ingestion for a niche.
 
 Unique: `(niche_id, platform, type, value)`. Discovery (SPEC §4.0) reads these: `type='keyword'` → search, `type='account'` (competitor/niche, `is_own=false`) → account mining, `type='sound'` → audio expansion. Competitor accounts are **additive seeds, never a filter**.
 
+### 3.2b `intent_cache`
+The intent-filter verdict per **(project, external video_id)**. Intent is context-dependent (a video is a pitch for one business, off-goal for another) so it's keyed by project, not global. Cached so re-runs are stable — the classifier is non-deterministic, so we classify each video **once** and reuse the verdict.
+
+| col | type | notes |
+|---|---|---|
+| id | uuid pk | |
+| project_id | uuid fk → projects | |
+| platform | platform not null | |
+| video_id | text not null | external id (set *before* the video is persisted, so keyed by the external id, not our uuid) |
+| is_pitch | boolean not null | |
+| created_at | timestamptz | |
+
+Unique: `(project_id, platform, video_id)`. (Hook analyses are cached similarly — `_rank_and_hook` reuses an existing `analyses` row instead of re-running vision, which also sidesteps expiring CDN URLs. Derived `scores` are cleared and rewritten each run, unlike append-only `video_snapshots`.)
+
 ### 3.3 `authors`
 A creator account. One per `(platform, handle)`.
 
