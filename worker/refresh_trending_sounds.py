@@ -4,12 +4,14 @@ the region trending feed when it's unavailable. Run manually now; cron later.
 
 Usage: python refresh_trending_sounds.py [REGION ...]   (default: US IN)
 """
+import os
 import sys
 
 from trendradar import db
 from trendradar.sources import get_source
 
-DEFAULT_REGIONS = ["US", "IN"]
+# argv overrides env (TRENDING_REGIONS, comma-separated) overrides the built-in default.
+DEFAULT_REGIONS = [r.strip().upper() for r in os.getenv("TRENDING_REGIONS", "US,IN").split(",") if r.strip()]
 
 
 def refresh(regions: list[str]) -> dict[str, int]:
