@@ -1,6 +1,7 @@
 # SPEC.md — TrendRadar
 
 > Conventions, contracts, and boundaries. Derived from PLAN.md. If it conflicts with PLAN.md, PLAN.md wins and this gets fixed.
+> **Product definition = `NORTH_STAR.md` (2026-09-10 reframe) — it wins over both on *what* we build.**
 > No slop. Precise over complete.
 
 ---
@@ -105,7 +106,9 @@ class RawProfile:
 
 ### 2.4 Project onboarding (the profile that drives everything)
 
-Onboarding is a short **form wizard**. The user pastes their **product URL**; the web app fetches the page and an LLM **pre-fills as many fields as it can**. **Every field is user-editable** — AI proposes, the human owns. The richer/more correct the profile, the better-targeted the queries and discovery.
+> Reframed per `NORTH_STAR.md`: onboarding's real job is to capture the **peer set** (the accounts you compete with for the same audience — same niche + same growth goal) + niche/region. The commercial **goal** is used only at **adaptation** (§4.4), NEVER to filter discovery. "Competitors" below = this peer set.
+
+Onboarding is a short **form wizard**. The user pastes their **product URL** (or creator handle); the web app fetches the page and an LLM **pre-fills as many fields as it can**. **Every field is user-editable** — AI proposes, the human owns. The richer/more correct the profile, the better-targeted the queries and discovery.
 
 Fields (AI-prefilled unless noted):
 - **name, product_description, niche, target_audience, goal (job-to-be-done)** — derived from the site.
@@ -143,16 +146,21 @@ class ScoringStrategy(Protocol):
 
 ## 4. Analysis pipeline (outliers only)
 
-### 4.0 Discovery — where candidates come from (union of 3 sources)
-Candidates are the **deduped union** of three additive sources (a thin single source starves the clusters — see the first live Reels run: 6 good queries → only 4 reels → all 1-video "emerging" concepts):
-1. **Keyword search** — the profile's seed keywords (`DataSource.search`). Current behaviour.
-2. **Account mining** — the client's competitor + niche accounts (`DataSource.fetch_author_videos`). High relevance, cheap (one call returns many videos **and** the baseline). Accounts come from onboarding (§2.4) and are **additive, never a filter**.
-3. **Audio expansion** — for a sound trending among our outliers, pull more videos on it (`DataSource.fetch_song_videos`). Rides proven momentum and feeds §4.5.
+> **Canonical model = `NORTH_STAR.md`.** Discovery is **account-centric** — mine the user's *peer set* (same niche + same growth goal) and analyze ALL their content, not just pitches. The sections below reflect that.
 
-Dedupe on `(platform, video_id)`; every source's videos flow into the same intent → score → hook → cluster pipeline. **Region** (user-set, §2.4) scopes sources: in-region query language + in-region accounts. Default is in-region only; an **optional "cross-region format inspiration" toggle** may pull proven formats from other regions (specifics — language, pricing, local marketplaces — do not travel; formats/hooks do, and get localized at adaptation §4.4).
+### 4.0 Discovery — build & mine the PEER SET (account-centric)
+Relevance lives at the **account** level, not the video level. Candidates come from **mining the peer set** — the accounts the user competes with for the same audience (business → peer businesses; creator → peer creators; onboarding §2.4). Once an account is a peer, **all its content counts** (organic skits, education, memes — not just product pitches).
 
-### 4.1 Intent filter (relevance — runs before scoring on candidates)
-`LLMProvider(INTENT)` classifies each candidate: **is this a product/tool PITCH** (matches the client's job-to-be-done) or education/storytime? Keep pitches only. **Cache the result per `video_id`** (the classifier is non-deterministic — classify once, reuse; determinism matters).
+- **Mine peers** (`DataSource.fetch_author_videos`) — the moat: ~1 credit returns many of a peer's videos **and** the account baseline.
+- **Grow the peer set** — keyword/hashtag search + same-audio (`fetch_song_videos`) surface *candidate accounts*, which are **filtered to peers** (§4.1) and then mined. Keyword search is an **account-discovery** tool, NOT a way to pull content directly (that dragged in off-niche noise — comedians, food, generic finance).
+
+Dedupe on `(platform, video_id)`. **Region** (user-set, §2.4) scopes the peer set (language + local accounts). The commercial GOAL is applied only at adaptation (§4.4), never here.
+
+### 4.1 Account relevance — the PEER filter (replaces the old pitch filter)
+`LLMProvider` judges each candidate **account** (bio + what it posts): *is this a shared-intent peer* — same niche + same growth goal? Keep peers; drop topical-but-unrelated creators (a comedian who mentions the topic, an off-niche influencer). **This is per-account, cached, and is the ONLY relevance gate** — we do NOT filter individual videos by "is it a pitch." Cache the verdict (classifier is non-deterministic → classify once, reuse). Once an account is in, all its videos flow into score → hook → cluster.
+
+### 4.1b Tiered analysis — "N uses across M accounts" without vision on everything
+To count how many videos/accounts share a hook, use a **cheap counting layer**: cluster hooks from the **caption + on-screen text already scraped** (no vision) across the whole peer corpus → group equivalent hooks → count **uses** (videos) + **accounts** (distinct creators; the trust number). Run the **deep DNA layer** (download + vision: format, structure, emotional driver, story arc, replication score) only on the **outliers/winners**. "N uses" = N in the analyzed corpus (a sample, not a census).
 
 ### 4.2 Real hook (the caption is NOT the hook — PHASE0_FINDINGS §5)
 ```

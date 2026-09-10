@@ -80,9 +80,24 @@
 
 ---
 
-## Phase 3 — Time-series + Trend engine + Alerts
+## Phase 2.6 — Peer-set reframe (fix the main pipeline) — NEXT — see NORTH_STAR.md
 
-**Goal:** the "Stay ahead of what happens next" surface — powered by accumulated `video_snapshots` history, so lifecycle and velocity become real rather than proxied.
+**Goal:** steer discovery back to the real product — *what's winning/rising among the user's peer set* — after drifting into "copy competitors' conversion ads." This is the priority before the trend engine.
+
+**Tasks**
+- **Account-level relevance:** delete the per-video "is it a pitch" filter; replace with a per-**account** "is this a shared-intent peer?" classifier (same niche + same growth goal). Once a peer is in, ALL its content counts. (SPEC §4.1)
+- **Account-centric discovery:** mine the peer set as the core source; keyword/hashtag search becomes an **account-discovery** tool (find candidate accounts → filter to peers → mine), not a direct content pull. (SPEC §4.0)
+- **Onboarding = capture the peer set** (competitors/peers you chase) + niche; the commercial goal is used only at adaptation, never to filter discovery. (SPEC §2.4)
+- **Tiered analysis:** add the cheap hook-**counting** layer (cluster caption/on-screen text across the peer corpus → "N uses across M accounts") alongside deep vision-on-outliers. (SPEC §4.1b)
+- **Surface Creative DNA** we already capture (hook/format/emotional driver/structure/replication score).
+
+**Exit criterion:** for a real peer set (business or creator), discovery returns *what those peers are winning with* (any content type, not just pitches), with honest "N uses across M accounts" counts — no off-niche noise, no goal-imposed narrowing.
+
+---
+
+## Phase 3 — Time-series + Trend engine + Alerts — the "stay ahead" intelligence
+
+**Goal:** the "Stay ahead of what happens next" surface — powered by accumulated `video_snapshots` history, so lifecycle and velocity become real rather than proxied. **This is the headline intelligence gap vs the reference bar (NORTH_STAR §6).**
 
 **Tasks**
 - **Time-series:** use the `video_snapshots` history for true 24–72h velocity (not the single-snapshot `views ÷ age` proxy) and real **Growing/Declining** lifecycle on concepts.
@@ -101,6 +116,7 @@
 - **YouTube Shorts** — one new `DataSource` mapping + `ScoringStrategy`.
 - **Full brief/script generation** — shot-ready scripts with timecodes (the Create layer of the reference product).
 - **Distill-to-local model** (PLAN §11.8) — fine-tune on accumulated `(video → analysis)` pairs to cut LLM cost toward zero.
+- **Ad-library conversion signal** (NORTH_STAR §7) — read Meta/TikTok ad libraries ("still running 47d / 18 ad variants") as a **conversion** signal for the business persona, complementing organic-outperformance (reach). `ad-library-teardown` skill ready. Add *after* the main pipeline reframe.
 - **Agency multi-workspace + public SaaS wrapper** — enable RLS enforcement, billing, onboarding.
 
 ---

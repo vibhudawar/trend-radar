@@ -3,6 +3,8 @@
 > Master plan. Single source of truth until it's split into SPEC / DATABASE_SCHEMA / API_CONTRACTS / ROADMAP / CLAUDE_CODE_PROMPTS.
 > Precise over complete. No slop. If a decision changes, change it here first.
 >
+> **⚑ Product definition is now pinned in `NORTH_STAR.md` (2026-09-10 reframe: peer-set / account-centric / organic-first). It supersedes any "copy competitor conversion ads" framing anywhere in this file.**
+>
 > **TrendRadar** — a UGC trend-intelligence engine.
 
 ---
