@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutGrid, Plus, type LucideIcon } from "lucide-react";
+import { LayoutGrid, Music, Plus, type LucideIcon } from "lucide-react";
 
 import { UserMenu } from "@/components/shared/user-menu";
 import { Wordmark } from "@/components/shared/wordmark";
@@ -22,6 +22,7 @@ type NavItem = { href: string; label: string; icon: LucideIcon };
 
 const NAV_ITEMS: NavItem[] = [
   { href: "/", label: "Projects", icon: LayoutGrid },
+  { href: "/sounds", label: "Trending Songs", icon: Music },
   { href: "/projects/new", label: "New Project", icon: Plus },
 ];
 
