@@ -106,19 +106,28 @@ def set_video_content_type(conn: psycopg.Connection, video_uuid: str, content_ty
     conn.execute("update videos set content_type=%s where id=%s", (content_type, video_uuid))
 
 
-def get_cached_intent(conn: psycopg.Connection, project_id: str) -> dict[tuple[str, str], bool]:
-    """All cached intent verdicts for a project → {(platform, video_id): is_pitch}."""
+def get_cached_peers(conn: psycopg.Connection, project_id: str) -> dict[tuple[str, str], bool]:
+    """All cached PEER verdicts for a project → {(platform, handle): is_peer}."""
     rows = conn.execute(
-        "select platform, video_id, is_pitch from intent_cache where project_id=%s", (project_id,)
+        "select platform, handle, is_peer from peer_cache where project_id=%s", (project_id,)
     ).fetchall()
-    return {(r["platform"], r["video_id"]): r["is_pitch"] for r in rows}
+    return {(r["platform"], r["handle"]): r["is_peer"] for r in rows}
 
 
-def cache_intent(conn: psycopg.Connection, project_id: str, platform: str, video_id: str, is_pitch: bool) -> None:
+def cache_peer(conn: psycopg.Connection, project_id: str, platform: str, handle: str, is_peer: bool) -> None:
     conn.execute(
-        """insert into intent_cache (project_id, platform, video_id, is_pitch) values (%s,%s,%s,%s)
-           on conflict (project_id, platform, video_id) do update set is_pitch=excluded.is_pitch""",
-        (project_id, platform, video_id, is_pitch),
+        """insert into peer_cache (project_id, platform, handle, is_peer) values (%s,%s,%s,%s)
+           on conflict (project_id, platform, handle) do update set is_peer=excluded.is_peer""",
+        (project_id, platform, handle, is_peer),
+    )
+
+
+def add_account_query(conn: psycopg.Connection, project_id: str, platform: str, handle: str) -> None:
+    """Persist a newly-confirmed peer as an account seed so the peer set compounds across runs."""
+    conn.execute(
+        """insert into queries (project_id, platform, type, value, is_own) values (%s,%s,'account',%s,false)
+           on conflict (project_id, platform, type, value) do nothing""",
+        (project_id, platform, handle),
     )
 
 

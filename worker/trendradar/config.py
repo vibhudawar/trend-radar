@@ -35,6 +35,8 @@ TOP_OUTLIERS = int(os.getenv("TOP_OUTLIERS", "12"))  # how many to deep-analyze 
 # Evidence guardrails — never present non-winners as winners, or thin clusters as concepts.
 # A video only backs a concept if it BEAT its creator's own baseline by this much (needs a baseline).
 MIN_OUTPERFORMANCE = float(os.getenv("MIN_OUTPERFORMANCE", "1.5"))
+# ...but absurd multiples (e.g. 300x) are almost always a tiny/unreliable baseline, not a real insight.
+MAX_OUTPERFORMANCE = float(os.getenv("MAX_OUTPERFORMANCE", "75"))
 # A concept is only surfaced with at least this many winning videos AND distinct creators.
 MIN_CONCEPT_VIDEOS = int(os.getenv("MIN_CONCEPT_VIDEOS", "2"))
 MIN_CONCEPT_CREATORS = int(os.getenv("MIN_CONCEPT_CREATORS", "2"))

@@ -207,6 +207,7 @@ def parse_ig_profile(body: dict[str, Any], handle: str) -> dict[str, Any]:
         "follower_count": (u.get("edge_followed_by") or {}).get("count"),
         "baseline_median_views": int(st.median(plays)) if plays else None,
         "is_verified": bool(u.get("is_verified")) or None,
+        "bio": u.get("biography") or "",  # for peer confirmation (NORTH_STAR §4)
         "videos": vids,
     }
 

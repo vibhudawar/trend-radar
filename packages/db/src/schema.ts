@@ -77,20 +77,20 @@ export const queries = pgTable(
   (t) => [uniqueIndex("queries_unique").on(t.projectId, t.platform, t.type, t.value)],
 );
 
-// --- intent_cache: the intent-filter verdict per (project, video). Intent is context-dependent
-// (a video is a pitch for one business, off-goal for another) so it's keyed by project. Cached so
-// results don't drift run-to-run (the classifier is non-deterministic — classify once, reuse).
-export const intentCache = pgTable(
-  "intent_cache",
+// --- peer_cache: the PEER verdict per (project, account). Relevance is account-level, not
+// video-level (NORTH_STAR §3) — is this account a shared-intent peer of the project? Keyed by
+// project (peer-ness is context-dependent) and cached so results don't drift run-to-run.
+export const peerCache = pgTable(
+  "peer_cache",
   {
     id: id(),
     projectId: uuid("project_id").notNull().references(() => projects.id),
     platform: platform("platform").notNull(),
-    videoId: text("video_id").notNull(), // external id (not our uuid — set before the video is persisted)
-    isPitch: boolean("is_pitch").notNull(),
+    handle: text("handle").notNull(),
+    isPeer: boolean("is_peer").notNull(),
     createdAt: createdAt(),
   },
-  (t) => [uniqueIndex("intent_cache_unique").on(t.projectId, t.platform, t.videoId)],
+  (t) => [uniqueIndex("peer_cache_unique").on(t.projectId, t.platform, t.handle)],
 );
 
 // --- authors: a creator account; baseline_median_views = THE account baseline
