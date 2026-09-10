@@ -1,6 +1,29 @@
 # Render Blueprint (infra-as-code). Deploy: connect this repo as a Blueprint in the Render dashboard.
 # Secrets marked `sync: false` are set once in the dashboard (never committed).
 services:
+  # Worker API (FastAPI) — the web app's Refresh button calls POST /projects/{id}/refresh here.
+  # Protected by WORKER_SECRET (X-Worker-Secret header); set the SAME value on the web host (Vercel).
+  - type: web
+    name: trendradar-worker
+    runtime: python
+    rootDir: worker
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: DATA_SOURCE
+        value: scrapecreators
+      - key: DATABASE_URL
+        sync: false
+      - key: SCRAPECREATORS_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: WORKER_SECRET
+        sync: false # set the SAME value here and on the web host (Vercel)
+
   # Global Trending Songs chart refresh (SPEC §4.5). Fetches the trending sounds per region and
   # upserts `trending_sounds`. Trending audio shifts over days, so once daily is plenty (~2 credits/day
   # for US+IN). Runs the same entrypoint as `python refresh_trending_sounds.py US IN` locally.

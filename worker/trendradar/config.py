@@ -12,6 +12,9 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 SCRAPECREATORS_API_KEY = os.getenv("SCRAPECREATORS_API_KEY", "")
 APIFY_API_KEY = os.getenv("APIFY_API_KEY", "")
+# Shared secret the web app sends (X-Worker-Secret) to authorize a refresh. When set, the API
+# rejects calls without it — protects the credit-spending endpoint once it's publicly reachable.
+WORKER_SECRET = os.getenv("WORKER_SECRET", "")
 
 SC_BASE = "https://api.scrapecreators.com"
 
