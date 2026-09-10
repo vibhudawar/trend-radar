@@ -15,6 +15,13 @@
       "when": 1788882998108,
       "tag": "0001_aspiring_chamber",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789071357278,
+      "tag": "0002_bumpy_scalphunter",
+      "breakpoints": true
     }
   ]
 }

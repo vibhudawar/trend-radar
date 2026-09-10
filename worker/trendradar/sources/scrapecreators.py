@@ -270,3 +270,84 @@ def instagram_author_videos(handle: str) -> dict[str, Any]:
     """Account mining (§4.0 source #2): recent reels WITH sound (music_canonical_id) + views +
     captions + baseline, one call. Uses instagram/user/reels (carries audio; profile-timeline doesn't)."""
     return parse_ig_user_reels(_get("/v1/instagram/user/reels", {"handle": handle}), handle)
+
+
+# --- Global Trending Songs (SPEC §4.5) --------------------------------------
+# A distribution lever, decoupled from the peer pipeline. Primary source is TikTok's true global
+# songs chart; when it's unavailable we aggregate music objects out of the region trending feed.
+
+def _url1(o: Any) -> str | None:
+    """First url from a TikTok {uri, url_list} media object (play_url / cover_*)."""
+    if isinstance(o, dict):
+        ul = o.get("url_list") or []
+        return ul[0] if ul else (o.get("uri") or None)
+    return o if isinstance(o, str) else None
+
+
+def _music_to_sound(m: dict[str, Any], example_url: str | None = None) -> dict[str, Any] | None:
+    """One TikTok music object → our normalized trending-sound dict."""
+    aid = m.get("id_str") or (str(m.get("id")) if m.get("id") else None) or m.get("mid")
+    if not aid:
+        return None
+    return {
+        "audio_id": str(aid),
+        "title": m.get("title"),
+        "author": m.get("author") or m.get("author_name"),
+        "play_url": _url1(m.get("play_url")),
+        "cover_url": _url1(m.get("cover_thumb") or m.get("cover_medium") or m.get("cover_large")),
+        "is_original_sound": m.get("is_original_sound"),
+        "is_commerce_music": m.get("is_commerce_music"),
+        "example_url": example_url,
+    }
+
+
+def parse_popular_songs(body: dict[str, Any]) -> list[dict[str, Any]]:
+    """/v1/tiktok/songs/popular → ranked sounds (true global chart). Tolerant of key naming."""
+    items = body.get("songs") or body.get("music_list") or body.get("sound_list") or body.get("data") or []
+    out: list[dict[str, Any]] = []
+    for it in items if isinstance(items, list) else []:
+        m = it.get("music") or it.get("clip") or it  # the object may BE the music, or wrap it
+        s = _music_to_sound(m, _url1((it.get("share_info") or {}).get("share_url")) or it.get("url"))
+        if s:
+            out.append(s)
+    return out
+
+
+def parse_trending_feed(body: dict[str, Any]) -> list[dict[str, Any]]:
+    """/v1/tiktok/get-trending-feed → dedupe the videos' music objects into a ranked sound list.
+    usage = how many trending videos in the feed carried the sound; keeps a few example urls."""
+    vids = body.get("aweme_list") or body.get("items") or []
+    if not isinstance(vids, list):
+        vids = []
+    by_id: dict[str, dict[str, Any]] = {}
+    for v in vids:
+        m = v.get("music") or v.get("added_sound_music_info") or {}
+        s = _music_to_sound(m, v.get("url"))
+        if not s:
+            continue
+        g = by_id.get(s["audio_id"])
+        if g is None:
+            s["usage"] = 1
+            s["examples"] = [v["url"]] if v.get("url") else []
+            by_id[s["audio_id"]] = s
+        else:
+            g["usage"] += 1
+            if v.get("url") and len(g["examples"]) < 4:
+                g["examples"].append(v["url"])
+    return sorted(by_id.values(), key=lambda s: -s["usage"])
+
+
+def tiktok_trending_sounds(region: str) -> tuple[list[dict[str, Any]], int]:
+    """Resilient global-chart fetch. Tries the true songs chart first (no region), falls back to the
+    region trending feed. Returns (sounds, credits_spent) — the caller does credit accounting."""
+    try:
+        songs = parse_popular_songs(_get("/v1/tiktok/songs/popular", {}))
+        if songs:  # primary healthy — rank is the chart order
+            for i, s in enumerate(songs):
+                s["usage"] = len(songs) - i  # preserve chart rank as usage_signal
+                s["examples"] = [s["example_url"]] if s.get("example_url") else []
+            return songs, 1
+    except Exception:  # noqa: BLE001 — service_unavailable etc. → fall back to the feed
+        pass
+    feed = parse_trending_feed(_get("/v1/tiktok/get-trending-feed", {"region": region}))
+    return feed, 1

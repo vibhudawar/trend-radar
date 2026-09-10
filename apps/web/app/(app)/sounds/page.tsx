@@ -1,5 +1,5 @@
-import { and, eq, inArray } from "drizzle-orm";
-import { authors, projects, trends, trendMembers, videos } from "@trendradar/db";
+import { desc, eq, sql } from "drizzle-orm";
+import { trendingSounds } from "@trendradar/db";
 import { safe } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
 import { SoundsBoard, type SoundRow } from "@/components/sounds-board";
@@ -7,61 +7,45 @@ import { SoundsBoard, type SoundRow } from "@/components/sounds-board";
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Trending Songs — TrendRadar" };
 
+// Global, region-keyed Trending Songs chart (SPEC §4.5) — NOT niche-scoped. Everyone sees the same
+// chart; the only axis is country. Fed by worker/refresh_trending_sounds into `trending_sounds`.
 export default async function SoundsPage({ searchParams }: { searchParams: Promise<{ region?: string }> }) {
-  const { region } = await searchParams;
-  const uid = await requireUserId();
+  const { region: qsRegion } = await searchParams;
+  await requireUserId();
 
-  const myProjects = await safe(
-    (d) => d.select({ id: projects.id, region: projects.region }).from(projects).where(eq(projects.ownerId, uid)),
-    [] as { id: string; region: string | null }[],
+  const regionRows = await safe(
+    (d) =>
+      d
+        .selectDistinct({ region: trendingSounds.region })
+        .from(trendingSounds)
+        .orderBy(trendingSounds.region),
+    [] as { region: string }[],
   );
-  const projectRegion = new Map(myProjects.map((p) => [p.id, p.region]));
-  const projectIds = myProjects.map((p) => p.id);
+  const regions = regionRows.map((r) => r.region);
+  const region = qsRegion && regions.includes(qsRegion) ? qsRegion : (regions[0] ?? null);
 
-  const soundTrends = projectIds.length
+  const rows = region
     ? await safe(
-        (d) => d.select({ id: trends.id, key: trends.key, label: trends.label, uses: trends.memberCount, projectId: trends.projectId })
-          .from(trends)
-          .where(and(inArray(trends.projectId, projectIds), eq(trends.type, "sound"))),
-        [] as { id: string; key: string; label: string | null; uses: number; projectId: string }[],
+        (d) =>
+          d
+            .select({
+              audioId: trendingSounds.audioId,
+              title: trendingSounds.title,
+              author: trendingSounds.author,
+              playUrl: trendingSounds.playUrl,
+              coverUrl: trendingSounds.coverUrl,
+              usage: trendingSounds.usageSignal,
+              examples: trendingSounds.exampleUrls,
+              isOriginal: trendingSounds.isOriginalSound,
+            })
+            .from(trendingSounds)
+            .where(eq(trendingSounds.region, region))
+            .orderBy(desc(trendingSounds.usageSignal), sql`${trendingSounds.title} asc nulls last`),
+        [] as Omit<SoundRow, "region">[],
       )
     : [];
 
-  const trendIds = soundTrends.map((t) => t.id);
-  const mems = trendIds.length
-    ? await safe(
-        (d) => d.select({ trendId: trendMembers.trendId, handle: authors.handle, url: videos.url })
-          .from(trendMembers)
-          .innerJoin(videos, eq(trendMembers.videoId, videos.id))
-          .leftJoin(authors, eq(videos.authorId, authors.id))
-          .where(inArray(trendMembers.trendId, trendIds)),
-        [] as { trendId: string; handle: string | null; url: string }[],
-      )
-    : [];
+  const sounds: SoundRow[] = rows.map((r) => ({ ...r, region: region ?? "" }));
 
-  // Aggregate by the sound (key) across all of the user's projects.
-  const byKey = new Map<string, { label: string | null; uses: number; handles: Set<string>; regions: Set<string>; examples: { handle: string | null; url: string }[] }>();
-  for (const t of soundTrends) {
-    const g = byKey.get(t.key) ?? { label: t.label, uses: 0, handles: new Set<string>(), regions: new Set<string>(), examples: [] };
-    g.label = g.label ?? t.label;
-    g.uses += t.uses;
-    const r = projectRegion.get(t.projectId);
-    if (r) g.regions.add(r);
-    for (const m of mems.filter((x) => x.trendId === t.id)) {
-      if (m.handle) g.handles.add(m.handle);
-      if (g.examples.length < 5) g.examples.push({ handle: m.handle, url: m.url });
-    }
-    byKey.set(t.key, g);
-  }
-
-  let sounds: SoundRow[] = [...byKey.entries()]
-    .map(([key, g]): SoundRow => ({
-      key, label: g.label, uses: g.uses, accounts: g.handles.size, regions: [...g.regions], examples: g.examples,
-    }))
-    .sort((a, b) => b.accounts - a.accounts || b.uses - a.uses);
-
-  const allRegions = [...new Set(sounds.flatMap((s) => s.regions))].sort();
-  if (region) sounds = sounds.filter((s) => s.regions.includes(region));
-
-  return <SoundsBoard sounds={sounds} regions={allRegions} activeRegion={region ?? null} />;
+  return <SoundsBoard sounds={sounds} regions={regions} activeRegion={region} />;
 }

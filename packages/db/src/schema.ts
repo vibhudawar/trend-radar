@@ -262,6 +262,33 @@ export const trends = pgTable(
   (t) => [index("trends_project_status").on(t.projectId, t.status)],
 );
 
+// --- trending_sounds: the GLOBAL, region-keyed Trending Songs chart (SPEC §4.5). NOT niche-
+// scoped and NOT project-scoped — trending audio is a distribution lever, so the chart is global.
+// Populated by a standalone fetch (worker/refresh_trending_sounds), independent of the peer
+// pipeline: primary `v1/tiktok/songs/popular`, fallback `v1/tiktok/get-trending-feed?region=<CC>`.
+// Upsert by (region, audioId); refreshed per run.
+export const trendingSounds = pgTable(
+  "trending_sounds",
+  {
+    id: id(),
+    region: text("region").notNull(), // ISO country code (US, IN, …) — the one axis of the tab
+    audioId: text("audio_id").notNull(), // TikTok music.id_str (stable key)
+    title: text("title"),
+    author: text("author"),
+    playUrl: text("play_url"), // audio stream url (preview)
+    coverUrl: text("cover_url"),
+    isOriginalSound: boolean("is_original_sound"), // stored now; UI toggle later
+    isCommerceMusic: boolean("is_commerce_music"),
+    usageSignal: integer("usage_signal").notNull().default(0), // rank / #trending videos carrying it
+    exampleUrls: text("example_urls").array(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("trending_sounds_region_audio").on(t.region, t.audioId),
+    index("trending_sounds_region_rank").on(t.region, t.usageSignal),
+  ],
+);
+
 // --- video_embeddings: pgvector store for the counting layer (NORTH_STAR §5). Compute-once —
 // the hook-proxy is embedded (text-embedding-3-small, 1536-dim) and reused across runs.
 // HNSW cosine index created in SQL (worker-managed): `using hnsw (embedding vector_cosine_ops)`.

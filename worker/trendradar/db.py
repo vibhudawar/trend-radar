@@ -240,6 +240,32 @@ def insert_trend(conn: psycopg.Connection, project_id: str, *, ttype: str, key: 
         )
 
 
+def upsert_trending_sound(conn: psycopg.Connection, region: str, s: dict[str, Any]) -> None:
+    """Upsert one global trending sound by (region, audio_id) — Trending Songs chart (SPEC §4.5)."""
+    conn.execute(
+        """insert into trending_sounds
+             (region, audio_id, title, author, play_url, cover_url,
+              is_original_sound, is_commerce_music, usage_signal, example_urls, fetched_at)
+           values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+           on conflict (region, audio_id) do update set
+             title=excluded.title, author=excluded.author, play_url=excluded.play_url,
+             cover_url=excluded.cover_url, is_original_sound=excluded.is_original_sound,
+             is_commerce_music=excluded.is_commerce_music, usage_signal=excluded.usage_signal,
+             example_urls=excluded.example_urls, fetched_at=now()""",
+        (region, s["audio_id"], s.get("title"), s.get("author"), s.get("play_url"), s.get("cover_url"),
+         s.get("is_original_sound"), s.get("is_commerce_music"), int(s.get("usage") or 0),
+         s.get("examples") or []),
+    )
+
+
+def clear_region_sounds(conn: psycopg.Connection, region: str, keep_audio_ids: list[str]) -> None:
+    """Drop stale rows for a region — sounds that fell off the chart since the last fetch."""
+    if keep_audio_ids:
+        conn.execute("delete from trending_sounds where region=%s and audio_id <> all(%s)", (region, keep_audio_ids))
+    else:
+        conn.execute("delete from trending_sounds where region=%s", (region,))
+
+
 def clear_concepts(conn: psycopg.Connection, project_id: str, lane: str) -> None:
     conn.execute(
         """delete from concept_members where concept_id in
