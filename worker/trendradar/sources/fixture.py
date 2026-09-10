@@ -81,10 +81,13 @@ def instagram_profile(handle: str) -> dict[str, Any]:
 
 
 def instagram_author_videos(handle: str) -> dict[str, Any]:
-    body = _ig_profile_body(handle)
-    if not body:
-        return {"follower_count": None, "baseline_median_views": None, "is_verified": None, "videos": []}
-    return sc.parse_ig_profile(body, handle)
+    reels = _load("capture_user_reels.json") or {}   # instagram/user/reels captures (carry audio)
+    if handle in reels:
+        return sc.parse_ig_user_reels(reels[handle], handle)
+    body = _ig_profile_body(handle)  # fallback: old profile-timeline capture (no audio)
+    if body:
+        return sc.parse_ig_profile(body, handle)
+    return {"follower_count": None, "baseline_median_views": None, "is_verified": None, "bio": "", "videos": []}
 
 
 def tiktok_author_videos(handle: str) -> list[dict[str, Any]]:
