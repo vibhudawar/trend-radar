@@ -15,6 +15,11 @@ from .config import DATABASE_URL, require
 def connect() -> Iterator[psycopg.Connection]:
     conn = psycopg.connect(require("DATABASE_URL", DATABASE_URL), row_factory=dict_row)
     try:
+        from pgvector.psycopg import register_vector  # pgvector round-trips embeddings as numpy arrays
+        register_vector(conn)
+    except Exception:  # noqa: BLE001 - fine if pgvector isn't set up (e.g. a fresh env)
+        pass
+    try:
         yield conn
         conn.commit()
     except Exception:
@@ -178,6 +183,61 @@ def clear_scores(conn: psycopg.Connection, project_id: str) -> None:
     conn.execute(
         "delete from scores where video_id in (select id from videos where project_id=%s)", (project_id,)
     )
+
+
+def get_corpus_for_counting(conn: psycopg.Connection, project_id: str) -> list[dict[str, Any]]:
+    """All the project's peer videos with the cheap signals the counting layer needs."""
+    return conn.execute(
+        """select v.id as uuid, a.handle, v.caption, v.audio_id, v.audio_title, v.url,
+                  an.hook_text,
+                  (select max(view_count) from video_snapshots s where s.video_id = v.id) as views
+           from videos v
+           join authors a on a.id = v.author_id
+           left join analyses an on an.video_id = v.id
+           where v.project_id = %s""",
+        (project_id,),
+    ).fetchall()
+
+
+def get_stored_embeddings(conn: psycopg.Connection, project_id: str) -> dict[str, tuple[str, Any]]:
+    """{video_id: (source_hash, embedding)} for the project — so we embed each hook only once."""
+    rows = conn.execute(
+        """select ve.video_id, ve.source_hash, ve.embedding from video_embeddings ve
+           join videos v on v.id = ve.video_id where v.project_id = %s""",
+        (project_id,),
+    ).fetchall()
+    return {str(r["video_id"]): (r["source_hash"], r["embedding"]) for r in rows}
+
+
+def upsert_embedding(conn: psycopg.Connection, video_uuid: str, model: str, source_hash: str, embedding: list) -> None:
+    conn.execute(
+        """insert into video_embeddings (video_id, model, source_hash, embedding) values (%s,%s,%s,%s)
+           on conflict (video_id) do update set
+             model=excluded.model, source_hash=excluded.source_hash,
+             embedding=excluded.embedding, updated_at=now()""",
+        (video_uuid, model, source_hash, embedding),
+    )
+
+
+def clear_trends(conn: psycopg.Connection, project_id: str) -> None:
+    conn.execute(
+        "delete from trend_members where trend_id in (select id from trends where project_id=%s)", (project_id,)
+    )
+    conn.execute("delete from trends where project_id=%s", (project_id,))
+
+
+def insert_trend(conn: psycopg.Connection, project_id: str, *, ttype: str, key: str,
+                 label: str | None, member_uuids: list[str]) -> None:
+    row = conn.execute(
+        """insert into trends (project_id, type, key, label, status, member_count, first_detected_at)
+           values (%s,%s,%s,%s, null, %s, now()) returning id""",
+        (project_id, ttype, key, label, len(member_uuids)),
+    ).fetchone()
+    for vid in member_uuids:
+        conn.execute(
+            "insert into trend_members (trend_id, video_id) values (%s,%s) on conflict do nothing",
+            (row["id"], vid),
+        )
 
 
 def clear_concepts(conn: psycopg.Connection, project_id: str, lane: str) -> None:

@@ -22,6 +22,8 @@ DATA_SOURCE = os.getenv("DATA_SOURCE", "scrapecreators")
 MODEL_INTENT = os.getenv("MODEL_INTENT", "gpt-5-nano")
 MODEL_VISION = os.getenv("MODEL_VISION", "gpt-4o-mini")
 MODEL_REASON = os.getenv("ONBOARDING_MODEL", "gpt-5-mini")  # hook-extract / cluster / adapt
+EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")  # counting-layer hook embeddings (pgvector)
+CLUSTER_SIM_THRESHOLD = float(os.getenv("CLUSTER_SIM_THRESHOLD", "0.78"))  # cosine sim to group hooks
 
 # Credit ceilings (1 credit = 1 ScrapeCreators request). BACKEND.md §8.
 CREDIT_CAP_PER_RUN = int(os.getenv("CREDIT_CAP_PER_RUN", "40"))

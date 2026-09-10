@@ -3,15 +3,18 @@ Runs on outliers only; enforces the per-run credit ceiling; retries live in the 
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import statistics as st
+from collections import defaultdict
 from typing import Any
 
+import numpy as np
 import psycopg
 
 from . import db, llm
-from .config import (CREDIT_CAP_PER_RUN, DATA_SOURCE, ENRICH_RESERVE_FRAC, MAX_OUTPERFORMANCE,
-                     MIN_CONCEPT_CREATORS, MIN_CONCEPT_VIDEOS, MIN_OUTPERFORMANCE, MIN_VIEWS,
-                     RISING_MAX_AGE_DAYS, TOP_OUTLIERS)
+from .config import (CLUSTER_SIM_THRESHOLD, CREDIT_CAP_PER_RUN, DATA_SOURCE, EMBED_MODEL,
+                     ENRICH_RESERVE_FRAC, MAX_OUTPERFORMANCE, MIN_CONCEPT_CREATORS, MIN_CONCEPT_VIDEOS,
+                     MIN_OUTPERFORMANCE, MIN_VIEWS, RISING_MAX_AGE_DAYS, TOP_OUTLIERS)
 from .media import frames_from_video
 from .scoring import score_video
 from .sources import get_source
@@ -313,6 +316,84 @@ def _cluster_and_adapt(conn, project, lane: str, ranked: list[dict]) -> None:
         }, [m["uuid"] for m in members])
 
 
+def _first_line(text: str | None) -> str:
+    lines = (text or "").strip().splitlines()
+    return lines[0][:140] if lines else ""
+
+
+def _greedy_cluster(embs: list[list[float]], threshold: float = 0.82) -> list[list[int]]:
+    """Deterministic greedy cosine clustering (process in input order; join to nearest centroid)."""
+    x = np.array(embs, dtype=float)
+    x = x / (np.linalg.norm(x, axis=1, keepdims=True) + 1e-9)
+    clusters: list[dict] = []  # {"idx": [...], "cent": vec}
+    for i in range(len(x)):
+        best, best_sim = None, threshold
+        for c in clusters:
+            sim = float(np.dot(x[i], c["cent"]))
+            if sim >= best_sim:
+                best, best_sim = c, sim
+        if best is None:
+            clusters.append({"idx": [i], "cent": x[i].copy()})
+        else:
+            best["idx"].append(i)
+            m = x[best["idx"]].mean(axis=0)
+            best["cent"] = m / (np.linalg.norm(m) + 1e-9)
+    return [c["idx"] for c in clusters]
+
+
+def _hash(text: str) -> str:
+    return hashlib.md5(text.lower().encode()).hexdigest()
+
+
+def _count_trends(conn, project_id: str) -> None:
+    """Tiered counting layer (NORTH_STAR §5): cheap "N uses across M accounts" over the WHOLE peer
+    corpus. Hooks cluster on caption/on-screen text (embeddings stored in pgvector, compute-once);
+    sounds group by audio_id. Stored as `trends`. Only produces output at scale (recurring hooks)."""
+    rows = db.get_corpus_for_counting(conn, project_id)
+    db.clear_trends(conn, project_id)
+
+    # HOOKS — proxy = deep hook (outliers) else caption's first line; embed once, reuse via pgvector
+    hook_rows = [r for r in rows if (r.get("hook_text") or _first_line(r.get("caption")))]
+    hook_rows.sort(key=lambda r: (r.get("views") or 0), reverse=True)  # top-views video = representative
+    proxies = {str(r["uuid"]): (r.get("hook_text") or _first_line(r.get("caption"))).strip() for r in hook_rows}
+    stored = db.get_stored_embeddings(conn, project_id)  # {video_id: (source_hash, embedding)}
+
+    to_embed = [(vid, p) for vid, p in proxies.items() if p and stored.get(vid, (None,))[0] != _hash(p)]
+    if to_embed:
+        try:
+            new_embs = llm.embed([p for _, p in to_embed])
+        except Exception:  # noqa: BLE001 - counting is best-effort
+            new_embs = []
+        for (vid, p), emb in zip(to_embed, new_embs):
+            db.upsert_embedding(conn, vid, EMBED_MODEL, _hash(p), emb)
+            stored[vid] = (_hash(p), np.asarray(emb, dtype=float))
+
+    order = [str(r["uuid"]) for r in hook_rows if str(r["uuid"]) in stored]
+    embs = [np.asarray(stored[vid][1], dtype=float) for vid in order]
+    if embs:
+        for cl in _greedy_cluster(embs, CLUSTER_SIM_THRESHOLD):
+            member_vids = [order[j] for j in cl]
+            if len(member_vids) < 2:
+                continue
+            rep = proxies[member_vids[0]]
+            db.insert_trend(conn, project_id, ttype="hook", key="hook:" + _hash(rep)[:16],
+                            label=rep, member_uuids=member_vids)
+
+    # SOUNDS — exact group by audio_id (free; feeds the Trending Songs surface). Needs audio_id on
+    # mined videos, which the IG profile-timeline currently omits → usually empty until fixed.
+    by_audio: dict[str, list[str]] = defaultdict(list)
+    titles: dict[str, str | None] = {}
+    for r in rows:
+        if r.get("audio_id"):
+            by_audio[r["audio_id"]].append(str(r["uuid"]))
+            titles.setdefault(r["audio_id"], r.get("audio_title"))
+    for audio_id, vids in by_audio.items():
+        if len(vids) < 2:
+            continue
+        db.insert_trend(conn, project_id, ttype="sound", key="sound:" + str(audio_id),
+                        label=titles.get(audio_id), member_uuids=vids)
+
+
 def _run_lane(conn, project, budget: Budget, lane: str) -> None:
     platforms = project.get("platforms") or ["tiktok"]
     collected = [_collect_peers(conn, project, budget, lane, p) for p in ("tiktok", "reels") if p in platforms]
@@ -339,6 +420,10 @@ def run_project(project_id: str) -> dict[str, Any]:
             db.clear_scores(conn, project_id)  # replace derived scores each run (idempotent; snapshots still append)
             for lane in LANES:
                 _run_lane(conn, project, budget, lane)
+            try:
+                _count_trends(conn, project_id)  # corpus-wide "N uses across M accounts" (NORTH_STAR §5)
+            except Exception:  # noqa: BLE001 - counting is best-effort; never fail the run over it
+                pass
             budget_used = budget.used
             db.set_project_status(conn, project_id, "ready", refreshed=True, run_credits=budget_used)
     except Exception:

@@ -72,6 +72,14 @@ class AdaptResult(BaseModel):
     script: list[Beat]
 
 
+def embed(texts: list[str]) -> list[list[float]]:
+    """Cheap embeddings for the counting layer (hook clustering across the whole peer corpus)."""
+    if not texts:
+        return []
+    resp = client().embeddings.create(model="text-embedding-3-small", input=texts)
+    return [d.embedding for d in resp.data]
+
+
 def _parse(model: str, content: Any, schema: type[BaseModel]) -> BaseModel:
     resp = client().beta.chat.completions.parse(
         model=model,
