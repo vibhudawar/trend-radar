@@ -180,18 +180,20 @@ outlier → transcript endpoint (spoken opening, no download, DataSource.fetch_t
 ### 4.4 Adaptation (the deliverable)
 `LLMProvider(ADAPT)` per concept → rewritten hook for the client, format, length, **shoot-ready script (timecoded beats)**, **test target**, and the **winning-video links** (evidence for the client).
 
-### 4.5 Trending sounds (global chart, region-keyed — NOT niche-scoped)
-Trending audio is a **distribution lever, not a relevance signal** — the algorithm boosts reach for any video riding a hot sound, regardless of niche. So Trending Songs is **decoupled from the peer pipeline**: it is a **global chart**, not aggregated bottom-up from a project's peers. Country is the one real axis (trending audio genuinely differs US vs IN), so the tab is **region-keyed** with a country selector; there is deliberately **no niche filter**.
+### 4.5 Trending sounds (region-native chart, per platform — NOT niche-scoped)
+Trending audio is a **distribution lever, not a relevance signal** — the algorithm boosts reach for any video riding a hot sound, regardless of niche. So Trending Songs is **decoupled from the peer pipeline** and is a **chart**, not bottom-up aggregation from a project's peers. Two axes: **country**, then **platform**. There is deliberately **no niche filter**.
 
-**Source (ScrapeCreators, with graceful fallback):**
-- **Primary:** `v1/tiktok/songs/popular` — the true global ranked songs chart (no region param). Preferred when healthy.
-- **Fallback (current):** `v1/tiktok/get-trending-feed?region=<CC>` — region-required; each returned video carries a full `music` object (`id_str`, `title`, `author`, `play_url`, `cover`, `is_original_sound`, `is_commerce_music`, `duration`). We aggregate the music objects per region into the chart. Used automatically while `/songs/popular` returns `service_unavailable` (as it does now); the fetcher tries primary first and degrades with no rework.
+**Platform availability by region** (`REGION_PLATFORMS`): **IN → Instagram only** (TikTok is banned in India, so a TikTok-IN feed is diaspora content, not India-native — excluded); **US → Instagram + TikTok** (toggle). Extend the map to add countries.
 
-**Storage:** a **global `trending_sounds` table** (owner-agnostic, NOT project-scoped) — one row per (region, audio_id): `title`, `author`, `play_url`, `cover_url`, `is_original_sound`, `is_commerce_music`, `usage_signal` (rank/how many trending videos carried it), `example_video_urls`, `region`, `fetched_at`. Refreshed on a schedule (cron, later); compute-once per refresh, upsert by (region, audio_id).
+**Sources (ScrapeCreators):**
+- **Instagram (both regions):** `v1/instagram/reels/trending?region=<CC>` returns ~30 region-accurate trending reels **but strips audio**, so we enrich the **top `IG_TOP_N` (default 12)** reels via `v1/instagram/post?url=` — whose `clips_music_attribution_info` + `clips_metadata` carry `audio_id`, `song_name`, `artist_name`, `uses_original_audio`, `should_mute_audio`. Group by `audio_id`. Cost = **1 + IG_TOP_N credits/region**. (There is no IG trending-songs chart endpoint; the song-reels one is deprecated — this per-reel enrichment is the only IG-native path.) Reality: IG's regional trending skews toward global-viral + original-audio, not hyper-local content.
+- **TikTok (US only):** `v1/tiktok/get-trending-feed?region=US` → aggregate the videos' `music` objects (1 credit). Prefers `v1/tiktok/songs/popular` (true global chart) when it's healthy; it currently returns `service_unavailable`, so the feed is the working path.
 
-**UI:** `/sounds` — a **country selector** (regions we've fetched), ranked sounds with title/author, cover art, an audio preview/link, and example clips. The client-facing suggestion is simply **"use this sound — it's trending"**; muting it to ride the trend is their call, not ours.
+**Storage:** `trending_sounds` table (owner-agnostic, NOT project-scoped) — one row per **(region, platform, audio_id)**: `title`, `author`, `play_url`, `cover_url`, `is_original_sound`, `is_commerce_music`, `usage_signal`, `example_urls`, `fetched_at`. Upsert by (region, platform, audio_id); stale rows per (region, platform) cleared each refresh. Refreshed by `worker/refresh_trending_sounds.py` (cron ~2x/week — IG enrichment makes daily wasteful).
 
-**Deferred (data not thick/available yet):** a **"real songs vs. original sounds"** toggle (`is_original_sound`/`is_commerce_music` are stored now, exposed once per-region volume supports slicing); **rising-vs-mature velocity** (needs multi-day history — belongs to the trend engine); genre/mood (needs paid enrichment).
+**UI:** `/sounds` — **country selector**, then a **platform sub-filter** (US shows Instagram/TikTok; IN shows Instagram only). Ranked sounds with title/author, cover art, audio preview, example clips. Suggestion copy = **"use this sound — it's trending"**; muting it to ride the trend is their call.
+
+**Deferred:** **"real songs vs. original sounds"** toggle (`is_original_sound`/`is_commerce_music` stored now); **rising-vs-mature velocity** (needs history — trend engine); genre/mood (paid enrichment).
 
 ### 4.6 Evidence guardrails (trust — never present anecdote as proof)
 The tool's whole promise is *evidence-backed* recommendations, so a concept must be earned:

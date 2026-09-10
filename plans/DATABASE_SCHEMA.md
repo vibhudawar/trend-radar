@@ -234,14 +234,15 @@ PK: `(concept_id, video_id)`.
 ### 3.9b `video_embeddings` (pgvector — counting layer)
 Compute-once hook embeddings for the "N uses across M accounts" counting layer (NORTH_STAR §5). One row per video: `video_id` (pk → videos), `model`, `source_hash` (md5 of the proxy text — re-embed only when it changes), `embedding vector(1536)` (`text-embedding-3-small`), `updated_at`. HNSW cosine index (`using hnsw (embedding vector_cosine_ops)`). Requires `create extension vector` (Supabase-native pgvector; no Pinecone). Worker clusters greedily (cosine ≥ `CLUSTER_SIM_THRESHOLD`) → `trends`. Only produces output at scale (recurring hooks); a tiny/varied peer set yields none.
 
-### 3.9c `trending_sounds` (global chart — SPEC §4.5)
-Backs the **global, region-keyed Trending Songs tab**. This is **NOT niche-scoped and NOT project-scoped** — trending audio is a distribution lever, so the chart is global. Populated by a standalone fetch (cron, later), independent of the peer pipeline: primary `v1/tiktok/songs/popular`, fallback `v1/tiktok/get-trending-feed?region=<CC>`. Upsert by `(region, audio_id)`; refreshed per run.
+### 3.9c `trending_sounds` (region-native chart — SPEC §4.5)
+Backs the **region-native Trending Songs tab** (two axes: country, then platform). **NOT niche-scoped, NOT project-scoped.** Populated by a standalone fetch (`worker/refresh_trending_sounds.py`, cron ~2x/week), independent of the peer pipeline. Per platform: **IG** = `reels/trending?region` + top-N `instagram/post` enrichment (audio); **TikTok (US only)** = `get-trending-feed`/`songs/popular`. Upsert by `(region, platform, audio_id)`; stale rows per (region, platform) cleared each refresh.
 
 | col | type | notes |
 |---|---|---|
 | id | uuid pk | |
-| region | text not null | ISO country code (`US`, `IN`, …); the one axis of the tab |
-| audio_id | text not null | TikTok `music.id_str` (stable key) |
+| region | text not null | ISO country code (`US`, `IN`); first axis |
+| platform | text not null | `instagram` \| `tiktok`; second axis (IN=IG only, US=both) |
+| audio_id | text not null | stable audio key (IG `audio_id` / TikTok `music.id_str`) |
 | title | text | song title |
 | author | text | sound author / artist |
 | play_url | text | audio stream url (preview) |
@@ -252,7 +253,7 @@ Backs the **global, region-keyed Trending Songs tab**. This is **NOT niche-scope
 | example_urls | text[] | a few example video urls using it |
 | fetched_at | timestamptz not null default now() | |
 
-Unique: `(region, audio_id)`. Index: `(region, usage_signal desc)`.
+Unique: `(region, platform, audio_id)`. Index: `(region, platform, usage_signal desc)`.
 
 ### 3.10 `trends`
 Layer 3 clusters (Phase 3). **Also backs the counting layer (hooks/sounds, §3.9b):** hook clusters and per-project sound groupings for "N uses across M accounts". (The *global* Trending Songs tab uses `trending_sounds` §3.9c, not this table.)

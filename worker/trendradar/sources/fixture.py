@@ -102,3 +102,8 @@ def tiktok_trending_sounds(region: str) -> tuple[list[dict[str, Any]], int]:
     # replay the captured trending feed (Trending Songs §4.5) → sounds; 0 credits
     body = _load("capture_trending_feed_us.json") or {}
     return sc.parse_trending_feed(body), 0
+
+
+def instagram_trending_sounds(region: str, top_n: int = 12) -> tuple[list[dict[str, Any]], int]:
+    # no cached IG-trending fixture (needs per-reel enrichment) → empty in fixture mode; 0 credits
+    return [], 0

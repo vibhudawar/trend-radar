@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { trendingSounds } from "@trendradar/db";
 import { safe } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
@@ -7,45 +7,63 @@ import { SoundsBoard, type SoundRow } from "@/components/sounds-board";
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Trending Songs — TrendRadar" };
 
-// Global, region-keyed Trending Songs chart (SPEC §4.5) — NOT niche-scoped. Everyone sees the same
-// chart; the only axis is country. Fed by worker/refresh_trending_sounds into `trending_sounds`.
-export default async function SoundsPage({ searchParams }: { searchParams: Promise<{ region?: string }> }) {
-  const { region: qsRegion } = await searchParams;
+// Region-native Trending Songs chart (SPEC §4.5). Two axes: country, then platform.
+// IN → Instagram only (TikTok banned); US → Instagram + TikTok. Not niche-scoped.
+export default async function SoundsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ region?: string; platform?: string }>;
+}) {
+  const qs = await searchParams;
   await requireUserId();
 
-  const regionRows = await safe(
+  // Distinct (region, platform) pairs we actually have data for.
+  const pairs = await safe(
     (d) =>
       d
-        .selectDistinct({ region: trendingSounds.region })
+        .selectDistinct({ region: trendingSounds.region, platform: trendingSounds.platform })
         .from(trendingSounds)
-        .orderBy(trendingSounds.region),
-    [] as { region: string }[],
+        .orderBy(trendingSounds.region, trendingSounds.platform),
+    [] as { region: string; platform: string }[],
   );
-  const regions = regionRows.map((r) => r.region);
-  const region = qsRegion && regions.includes(qsRegion) ? qsRegion : (regions[0] ?? null);
 
-  const rows = region
-    ? await safe(
-        (d) =>
-          d
-            .select({
-              audioId: trendingSounds.audioId,
-              title: trendingSounds.title,
-              author: trendingSounds.author,
-              playUrl: trendingSounds.playUrl,
-              coverUrl: trendingSounds.coverUrl,
-              usage: trendingSounds.usageSignal,
-              examples: trendingSounds.exampleUrls,
-              isOriginal: trendingSounds.isOriginalSound,
-            })
-            .from(trendingSounds)
-            .where(eq(trendingSounds.region, region))
-            .orderBy(desc(trendingSounds.usageSignal), sql`${trendingSounds.title} asc nulls last`),
-        [] as Omit<SoundRow, "region">[],
-      )
-    : [];
+  const regions = [...new Set(pairs.map((p) => p.region))];
+  const region = qs.region && regions.includes(qs.region) ? qs.region : (regions[0] ?? null);
+  const platforms = pairs.filter((p) => p.region === region).map((p) => p.platform);
+  const platform =
+    qs.platform && platforms.includes(qs.platform) ? qs.platform : (platforms[0] ?? null);
 
-  const sounds: SoundRow[] = rows.map((r) => ({ ...r, region: region ?? "" }));
+  const rows =
+    region && platform
+      ? await safe(
+          (d) =>
+            d
+              .select({
+                audioId: trendingSounds.audioId,
+                title: trendingSounds.title,
+                author: trendingSounds.author,
+                playUrl: trendingSounds.playUrl,
+                coverUrl: trendingSounds.coverUrl,
+                usage: trendingSounds.usageSignal,
+                examples: trendingSounds.exampleUrls,
+                isOriginal: trendingSounds.isOriginalSound,
+              })
+              .from(trendingSounds)
+              .where(and(eq(trendingSounds.region, region), eq(trendingSounds.platform, platform)))
+              .orderBy(desc(trendingSounds.usageSignal), sql`${trendingSounds.title} asc nulls last`),
+          [] as Omit<SoundRow, "region" | "platform">[],
+        )
+      : [];
 
-  return <SoundsBoard sounds={sounds} regions={regions} activeRegion={region} />;
+  const sounds: SoundRow[] = rows.map((r) => ({ ...r, region: region ?? "", platform: platform ?? "" }));
+
+  return (
+    <SoundsBoard
+      sounds={sounds}
+      regions={regions}
+      activeRegion={region}
+      platforms={platforms}
+      activePlatform={platform}
+    />
+  );
 }
