@@ -234,8 +234,28 @@ PK: `(concept_id, video_id)`.
 ### 3.9b `video_embeddings` (pgvector — counting layer)
 Compute-once hook embeddings for the "N uses across M accounts" counting layer (NORTH_STAR §5). One row per video: `video_id` (pk → videos), `model`, `source_hash` (md5 of the proxy text — re-embed only when it changes), `embedding vector(1536)` (`text-embedding-3-small`), `updated_at`. HNSW cosine index (`using hnsw (embedding vector_cosine_ops)`). Requires `create extension vector` (Supabase-native pgvector; no Pinecone). Worker clusters greedily (cosine ≥ `CLUSTER_SIM_THRESHOLD`) → `trends`. Only produces output at scale (recurring hooks); a tiny/varied peer set yields none.
 
+### 3.9c `trending_sounds` (global chart — SPEC §4.5)
+Backs the **global, region-keyed Trending Songs tab**. This is **NOT niche-scoped and NOT project-scoped** — trending audio is a distribution lever, so the chart is global. Populated by a standalone fetch (cron, later), independent of the peer pipeline: primary `v1/tiktok/songs/popular`, fallback `v1/tiktok/get-trending-feed?region=<CC>`. Upsert by `(region, audio_id)`; refreshed per run.
+
+| col | type | notes |
+|---|---|---|
+| id | uuid pk | |
+| region | text not null | ISO country code (`US`, `IN`, …); the one axis of the tab |
+| audio_id | text not null | TikTok `music.id_str` (stable key) |
+| title | text | song title |
+| author | text | sound author / artist |
+| play_url | text | audio stream url (preview) |
+| cover_url | text | cover art thumb |
+| is_original_sound | boolean | creator-original vs licensed (stored now; UI toggle later) |
+| is_commerce_music | boolean | licensed/commercial track flag |
+| usage_signal | integer | rank/how many trending videos carried it this fetch |
+| example_urls | text[] | a few example video urls using it |
+| fetched_at | timestamptz not null default now() | |
+
+Unique: `(region, audio_id)`. Index: `(region, usage_signal desc)`.
+
 ### 3.10 `trends`
-Layer 3 clusters (Phase 3). **Also backs the counting layer (hooks/sounds, §3.9b) and the global Trending Songs tab (SPEC §4.5):** `type='sound'`, `key=audio_id`. That tab aggregates `videos.audio_id` across the owner's projects (bottom-up), filterable by **region** via the owning project's `region`; per-sound metrics (usage, median outperformance, rising/mature) may be materialized here or computed live from `videos`+`scores`.
+Layer 3 clusters (Phase 3). **Also backs the counting layer (hooks/sounds, §3.9b):** hook clusters and per-project sound groupings for "N uses across M accounts". (The *global* Trending Songs tab uses `trending_sounds` §3.9c, not this table.)
 
 | col | type | notes |
 |---|---|---|

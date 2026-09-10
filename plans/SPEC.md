@@ -51,7 +51,7 @@ class DataSource(Protocol):
 ```
 
 - **Implementations:** `ScrapeCreatorsSource` (primary, validated), `ApifySource` (fallback — `apify/instagram-reel-scraper` for **IG shares**; `novi/tiktok-music-trend-api` for an official **TikTok trending-sounds chart by region** — optional, $45/mo, only if the bottom-up sounds signal (§4.5) proves insufficient), `OwnScraperSource` (future).
-- Endpoint map (ScrapeCreators, PHASE0_FINDINGS §2 + §10): TikTok `search/keyword`, `v3/profile/videos`, `video/transcript`, **`v1/tiktok/song/videos`** (videos using a song), **`v1/tiktok/song`** (song detail/usage); IG `v2/reels/search`, `instagram/post`, `instagram/profile`, **`v1/instagram/audio/reels`** (reels by audio id). No ScrapeCreators endpoint returns a top-down trending-sounds chart — the sounds signal is bottom-up (§4.5).
+- Endpoint map (ScrapeCreators, PHASE0_FINDINGS §2 + §10): TikTok `search/keyword`, `v3/profile/videos`, `video/transcript`, **`v1/tiktok/song/videos`** (videos using a song), **`v1/tiktok/song`** (song detail/usage); IG `v2/reels/search`, `instagram/post`, `instagram/profile`, **`v1/instagram/audio/reels`** (reels by audio id). Global Trending Songs (§4.5) uses **`v1/tiktok/songs/popular`** (true global chart, primary) with **`v1/tiktok/get-trending-feed?region=<CC>`** as the region-keyed fallback (currently in use — `/songs/popular` returns `service_unavailable`).
 - **`fetch_author_videos` is dual-use:** the account **baseline** (median of the creator's own recent views) *and* **account mining** — pulling a competitor/niche account's recent videos as discovery candidates (§4.0 source #2). Same call, both uses.
 - Every method **logs credits consumed** (`credit_log` table, §DATABASE_SCHEMA) with the call type and result count. No exceptions — we are on metered credits.
 - `RawVideo` is the **normalized** shape (§2.3). Each source maps its vendor JSON into it. Missing fields are `None`, never faked.
@@ -180,8 +180,18 @@ outlier → transcript endpoint (spoken opening, no download, DataSource.fetch_t
 ### 4.4 Adaptation (the deliverable)
 `LLMProvider(ADAPT)` per concept → rewritten hook for the client, format, length, **shoot-ready script (timecoded beats)**, **test target**, and the **winning-video links** (evidence for the client).
 
-### 4.5 Trending sounds (a signal, not a lane)
-Every candidate carries `audio_id`/`audio_title`. Aggregate sounds **bottom-up** across outliers → a **global Trending Songs tab** (across the user's projects, owner-scoped), **filterable by region** (region-set queries/accounts bias the ingested audio, so region is a first-class filter). Per sound: `#videos` using it, median `account_outperformance` of those videos, rising-vs-mature (velocity), and example clips. Stored via `trends` (`trend_type = 'sound'`) + `trend_members`. The client-facing suggestion is simply **"use this sound — it's trending"**; how they use it (including muting it to ride the trend) is their call, not ours. A top-down official chart by region is available via Apify (`novi/tiktok-music-trend-api`, §2.1) but is an **optional paid upgrade**, not the foundation.
+### 4.5 Trending sounds (global chart, region-keyed — NOT niche-scoped)
+Trending audio is a **distribution lever, not a relevance signal** — the algorithm boosts reach for any video riding a hot sound, regardless of niche. So Trending Songs is **decoupled from the peer pipeline**: it is a **global chart**, not aggregated bottom-up from a project's peers. Country is the one real axis (trending audio genuinely differs US vs IN), so the tab is **region-keyed** with a country selector; there is deliberately **no niche filter**.
+
+**Source (ScrapeCreators, with graceful fallback):**
+- **Primary:** `v1/tiktok/songs/popular` — the true global ranked songs chart (no region param). Preferred when healthy.
+- **Fallback (current):** `v1/tiktok/get-trending-feed?region=<CC>` — region-required; each returned video carries a full `music` object (`id_str`, `title`, `author`, `play_url`, `cover`, `is_original_sound`, `is_commerce_music`, `duration`). We aggregate the music objects per region into the chart. Used automatically while `/songs/popular` returns `service_unavailable` (as it does now); the fetcher tries primary first and degrades with no rework.
+
+**Storage:** a **global `trending_sounds` table** (owner-agnostic, NOT project-scoped) — one row per (region, audio_id): `title`, `author`, `play_url`, `cover_url`, `is_original_sound`, `is_commerce_music`, `usage_signal` (rank/how many trending videos carried it), `example_video_urls`, `region`, `fetched_at`. Refreshed on a schedule (cron, later); compute-once per refresh, upsert by (region, audio_id).
+
+**UI:** `/sounds` — a **country selector** (regions we've fetched), ranked sounds with title/author, cover art, an audio preview/link, and example clips. The client-facing suggestion is simply **"use this sound — it's trending"**; muting it to ride the trend is their call, not ours.
+
+**Deferred (data not thick/available yet):** a **"real songs vs. original sounds"** toggle (`is_original_sound`/`is_commerce_music` are stored now, exposed once per-region volume supports slicing); **rising-vs-mature velocity** (needs multi-day history — belongs to the trend engine); genre/mood (needs paid enrichment).
 
 ### 4.6 Evidence guardrails (trust — never present anecdote as proof)
 The tool's whole promise is *evidence-backed* recommendations, so a concept must be earned:
@@ -219,7 +229,7 @@ Retry every external call once with backoff; cache intent + hook + analysis by `
   - **Breakout table** — ranked outliers: thumbnail, author, outlier ×, engagement %, velocity, age, platform badge. Sortable, filterable by niche/platform.
   - **Video detail** — metric time-series (from `video_snapshots`), the analysis card (hook line, type, format, replication score), link to source.
   - **Trends board** — rising / peak / declining clusters with a sparkline of growth over time (Phase 3).
-  - **Trending Songs tab** — a **global** surface (across the user's projects, owner-scoped), **filterable by region**: ranked sounds with usage count, median outperformance, rising/mature badge, and example clips; each row links to the videos using it. Suggestion copy = "use this trending sound." (§4.5)
+  - **Trending Songs tab** — a **global, region-keyed chart** (NOT niche-scoped, NOT project-scoped): pick a country → ranked trending sounds with title/author, cover art, audio preview, and example clips. Fed by TikTok's trending source (`/songs/popular` → `get-trending-feed` fallback), stored in the global `trending_sounds` table. Suggestion copy = "use this trending sound." (§4.5)
   - **Alerts feed** — the "Stay ahead" surface (Phase 3).
 - **Anti-slop UI:** skeletons not spinners; empty states name the next action ("No niches yet — create one"); every surfaced number is clickable to its underlying videos. No vanity metrics.
 - Numbers formatted compact (`2.4M`, `15.4%`); `approximated`/`no_baseline` flags shown honestly, never hidden.

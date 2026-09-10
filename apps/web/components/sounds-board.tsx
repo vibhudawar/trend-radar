@@ -1,19 +1,22 @@
 import Link from "next/link";
-import { Music, PlayCircle } from "lucide-react";
+import { Music, PlayCircle, Volume2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 export type SoundRow = {
-  key: string;
-  label: string | null;
-  uses: number; // videos using it
-  accounts: number; // distinct creators
-  regions: string[];
-  examples: { handle: string | null; url: string }[];
+  audioId: string;
+  title: string | null;
+  author: string | null;
+  playUrl: string | null;
+  coverUrl: string | null;
+  usage: number; // rank / #trending videos carrying it
+  examples: string[] | null;
+  isOriginal: boolean | null;
+  region: string;
 };
 
-// The global Trending Songs tab — sounds your peers are riding, across your projects.
+// The global Trending Songs chart — region-keyed, NOT niche-scoped. Pick a country; ride a sound.
 export function SoundsBoard({ sounds, regions, activeRegion }: {
   sounds: SoundRow[]; regions: string[]; activeRegion: string | null;
 }) {
@@ -24,14 +27,13 @@ export function SoundsBoard({ sounds, regions, activeRegion }: {
         <h1 className="text-2xl font-bold tracking-tight">Trending Songs</h1>
       </div>
       <p className="text-muted-foreground mb-5 max-w-2xl text-sm leading-relaxed">
-        Sounds your peers are riding — ranked by how many <span className="text-foreground">accounts</span> use them.
-        Add a trending sound to your next video (muted or not, your call) to catch the wave and boost reach.
+        What&apos;s trending right now — globally, not by niche. Add a trending sound to your next
+        video (muted or not, your call) to catch the wave and boost reach.
       </p>
 
-      {regions.length > 1 ? (
+      {regions.length > 0 ? (
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          <span className="text-muted-foreground text-xs font-medium">Region:</span>
-          <RegionChip label="All" href="/sounds" active={!activeRegion} />
+          <span className="text-muted-foreground text-xs font-medium">Country:</span>
           {regions.map((r) => (
             <RegionChip key={r} label={r} href={`/sounds?region=${encodeURIComponent(r)}`} active={activeRegion === r} />
           ))}
@@ -43,31 +45,46 @@ export function SoundsBoard({ sounds, regions, activeRegion }: {
           <Music className="text-muted-foreground size-6" />
           <p className="text-base font-medium">No trending sounds yet</p>
           <p className="text-muted-foreground max-w-md text-sm">
-            A sound shows up here once the same audio is used across your peers' videos. Run more projects (and larger
-            peer sets) to surface the sounds worth riding.
+            The chart refreshes from the trending feed. Run{" "}
+            <code className="text-xs">worker/refresh_trending_sounds.py</code> to populate it.
           </p>
         </Card>
       ) : (
         <div className="flex flex-col gap-2.5">
           {sounds.map((s, i) => (
-            <Card key={s.key} className="flex-row items-center gap-4 p-4">
+            <Card key={s.audioId} className="flex-row items-center gap-4 p-4">
               <span className="text-muted-foreground w-5 shrink-0 text-center text-sm font-semibold tabular-nums">{i + 1}</span>
-              <span className="bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-lg">
-                <Music className="size-5" />
-              </span>
+              {s.coverUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={s.coverUrl} alt="" className="size-10 shrink-0 rounded-lg object-cover" />
+              ) : (
+                <span className="bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-lg">
+                  <Music className="size-5" />
+                </span>
+              )}
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold">{s.label || "Trending sound"}</div>
+                <div className="truncate text-sm font-semibold">{s.title || "Trending sound"}</div>
                 <div className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-1.5 text-xs">
-                  <span><span className="text-foreground font-medium">{s.accounts}</span> accounts</span>
-                  <span>·</span>
-                  <span><span className="text-foreground font-medium">{s.uses}</span> videos</span>
-                  {s.regions.map((r) => <Badge key={r} variant="outline" className="ml-0.5 px-1.5 py-0 text-[10px]">{r}</Badge>)}
+                  {s.author ? <span className="truncate">{s.author}</span> : null}
+                  {s.usage > 1 ? (
+                    <>
+                      <span>·</span>
+                      <span><span className="text-foreground font-medium">{s.usage}</span> trending clips</span>
+                    </>
+                  ) : null}
+                  {s.isOriginal ? <Badge variant="outline" className="ml-0.5 px-1.5 py-0 text-[10px]">Original</Badge> : null}
                 </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
-                {s.examples.slice(0, 3).map((e, j) => (
-                  <a key={j} href={e.url} target="_blank" rel="noreferrer"
-                    className="text-muted-foreground hover:text-foreground transition-colors" title={`@${e.handle ?? "creator"}`}>
+              <div className="flex shrink-0 items-center gap-2.5">
+                {s.playUrl ? (
+                  <a href={s.playUrl} target="_blank" rel="noreferrer"
+                    className="text-muted-foreground hover:text-foreground transition-colors" title="Preview audio">
+                    <Volume2 className="size-4" />
+                  </a>
+                ) : null}
+                {(s.examples ?? []).slice(0, 3).map((url, j) => (
+                  <a key={j} href={url} target="_blank" rel="noreferrer"
+                    className="text-muted-foreground hover:text-foreground transition-colors" title="Example clip">
                     <PlayCircle className="size-4" />
                   </a>
                 ))}

@@ -96,3 +96,9 @@ def tiktok_author_videos(handle: str) -> list[dict[str, Any]]:
     for v in vids:
         v["handle"] = handle
     return vids
+
+
+def tiktok_trending_sounds(region: str) -> tuple[list[dict[str, Any]], int]:
+    # replay the captured trending feed (Trending Songs §4.5) → sounds; 0 credits
+    body = _load("capture_trending_feed_us.json") or {}
+    return sc.parse_trending_feed(body), 0
