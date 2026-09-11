@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { analyses, authors, conceptMembers, concepts, projects, queries, trends, trendMembers, videos } from "@trendradar/db";
 import { safe } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
@@ -38,7 +38,7 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
   const project = await safe(
     async (d) =>
       (await d.select().from(projects)
-        .where(and(eq(projects.id, id), eq(projects.ownerId, uid)))
+        .where(and(eq(projects.id, id), eq(projects.ownerId, uid), isNull(projects.deletedAt)))
         .limit(1))[0] ?? null,
     null as typeof projects.$inferSelect | null,
   );

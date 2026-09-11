@@ -137,6 +137,17 @@ export async function updateProjectAction(
   return { ok: true };
 }
 
+// Soft-delete a project (sets deleted_at; rows stay for recovery). Ownership-enforced.
+export async function deleteProjectAction(projectId: string): Promise<void> {
+  const uid = await requireUserId();
+  await db()
+    .update(projects)
+    .set({ deletedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(projects.id, projectId), eq(projects.ownerId, uid)));
+  revalidatePath("/");
+  redirect("/");
+}
+
 // Trigger a pipeline run on the Python worker (fire-and-forget; worker updates project.status).
 export async function refreshProjectAction(projectId: string): Promise<{ ok: boolean; error?: string }> {
   const uid = await requireUserId();
