@@ -2,9 +2,9 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Pencil } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 
-import { updateProjectAction } from "@/app/actions";
+import { deleteProjectAction, updateProjectAction } from "@/app/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -37,7 +37,15 @@ export function EditProjectSheet({ project }: { project: EditableProject }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [pending, start] = useTransition();
+
+  function onDelete() {
+    setError(null);
+    start(async () => {
+      await deleteProjectAction(project.id); // redirects to "/" on success
+    });
+  }
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -105,6 +113,33 @@ export function EditProjectSheet({ project }: { project: EditableProject }) {
             </Row>
 
             {error ? <p className="text-sm text-red-500">{error}</p> : null}
+
+            <div className="mt-2 border-t pt-4">
+              {confirmDelete ? (
+                <div className="border-destructive/30 bg-destructive/5 flex flex-col gap-2.5 rounded-md border p-3">
+                  <p className="text-sm">Delete this project? Its concepts, sounds, and history stop showing. This can&apos;t be undone from the UI.</p>
+                  <div className="flex justify-end gap-2">
+                    <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmDelete(false)} disabled={pending}>
+                      Cancel
+                    </Button>
+                    <Button type="button" variant="destructive" size="sm" onClick={onDelete} disabled={pending}>
+                      {pending ? "Deleting…" : "Delete project"}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirmDelete(true)}
+                  className="text-destructive hover:text-destructive hover:bg-destructive/10 gap-2"
+                >
+                  <Trash2 className="size-4" />
+                  Delete project
+                </Button>
+              )}
+            </div>
           </div>
 
           <SheetFooter className="flex-row justify-end border-t">

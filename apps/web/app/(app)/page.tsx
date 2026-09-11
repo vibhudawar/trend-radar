@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { projects } from "@trendradar/db";
 import { safe } from "@/lib/db";
 import { requireUserId } from "@/lib/auth";
@@ -15,7 +15,7 @@ export default async function Dashboard() {
   const rows = await safe(
     (d) =>
       d.select().from(projects)
-        .where(eq(projects.ownerId, uid)) // owner-scoped
+        .where(and(eq(projects.ownerId, uid), isNull(projects.deletedAt))) // owner-scoped, not deleted
         .orderBy(desc(projects.createdAt))
         .limit(60),
     [] as (typeof projects.$inferSelect)[],
