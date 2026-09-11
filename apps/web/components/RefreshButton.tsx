@@ -15,17 +15,19 @@ export function RefreshButton({ projectId, status }: { projectId: string; status
   const safety = useRef<ReturnType<typeof setTimeout> | null>(null);
   const running = busy || status === "running";
 
-  // Once the worker has actually marked the run "running", let status drive the state.
+  // Once the DB reflects a started/terminal state, drop the local bridge and let status drive.
   useEffect(() => {
-    if (status === "running") setBusy(false);
+    if (status === "running" || status === "ready" || status === "failed") setBusy(false);
   }, [status]);
 
-  // Poll while a run is in progress so concepts/status stay fresh (Realtime is primary).
+  // Poll while a run is expected — during the just-clicked bridge (busy) AND while status is
+  // "running" — so we catch the status flip (the worker sets it a beat after the 202) and keep
+  // results fresh, even when Realtime isn't delivering. `running` covers both.
   useEffect(() => {
-    if (status !== "running") return;
-    const t = setInterval(() => router.refresh(), 8000);
+    if (!running) return;
+    const t = setInterval(() => router.refresh(), 5000);
     return () => clearInterval(t);
-  }, [status, router]);
+  }, [running, router]);
 
   useEffect(() => () => { if (safety.current) clearTimeout(safety.current); }, []);
 
@@ -39,9 +41,10 @@ export function RefreshButton({ projectId, status }: { projectId: string; status
       return;
     }
     router.refresh(); // pick up status="running"
-    // fallback: if status never flips (worker died), don't stay disabled forever
+    // fallback: if the run never even registers as running (worker unreachable), stop the spinner.
+    // The worker sets "running" within ~1-2s, so 45s only trips on a genuinely dead run.
     if (safety.current) clearTimeout(safety.current);
-    safety.current = setTimeout(() => setBusy(false), 15000);
+    safety.current = setTimeout(() => setBusy(false), 45000);
   }
 
   return (
