@@ -158,7 +158,8 @@ export async function refreshProjectAction(projectId: string): Promise<{ ok: boo
     .limit(1);
   if (!owned.length) return { ok: false, error: "not found" };
 
-  const base = process.env.WORKER_URL ?? "http://localhost:8000";
+  // strip trailing slashes so a WORKER_URL like "https://host/" doesn't produce "//projects" (404)
+  const base = (process.env.WORKER_URL ?? "http://localhost:8000").replace(/\/+$/, "");
   const headers: Record<string, string> = {};
   if (process.env.WORKER_SECRET) headers["X-Worker-Secret"] = process.env.WORKER_SECRET;
   try {
